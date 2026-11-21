@@ -1,0 +1,44 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "pocket-empires",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "entry": "splash.html",
+        "height": "tall"
+      },
+      "game": {
+        "entry": "game.html"
+      }
+    }
+  },
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "permissions": {
+    "redis": true,
+    "reddit": true,
+    "journeys": true
+  },
+  "scripts": {
+    "build": "npm run build",
+    "dev": "npm run build"
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Create Pocket Empires post",
+        "description": "Create a Pocket Empires — Daily 3-Minute RTS Siege post",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/post-create"
+      }
+    ]
+  },
+  "triggers": {
+    "onAppInstall": "/internal/triggers/post-create",
+    "onAppUpgrade": "/internal/triggers/post-create"
+  }
+}
