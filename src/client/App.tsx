@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   askHybridScoutAdvisor,
   composeBattleEpigraph,
@@ -45,6 +45,11 @@ import WarRoomScreen, {
   type CommunityWarStats,
   type LeaderboardRow,
 } from '../ui/WarRoomScreen.js';
+import {
+  useFixedSimulationLoop,
+  useMountTask,
+  useWindowKeydown,
+} from './hooks.js';
 import { journeys } from './telemetry.js';
 
 const READY: ClientMessage = { type: 'READY', app: 'momentum', version: 1 };
@@ -63,7 +68,7 @@ function saveLocal(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    /* private mode */
+    return;
   }
 }
 
@@ -119,15 +124,16 @@ export default function App() {
 
   const [screen, setScreen] = useState<'war_room' | 'game'>('war_room');
   const stateRef = useRef<GameState>(createInitialState(activeSpec));
+  const accRef = useRef(0);
   const [snapshot, setSnapshot] = useState<HudSnapshot>(() => makeSnapshot(stateRef.current));
   const [selectedUnitIds, setSelectedUnitIds] = useState<number[]>([]);
   const [selectedBuildingId, setSelectedBuildingId] = useState<number | null>(null);
   const [placementKind, setPlacementKind] = useState<BuildingKind | null>(null);
+  const [gameSpeed, setGameSpeed] = useState<1 | 1.5>(1);
   const [muted, setMutedState] = useState(false);
   const [whisper, setWhisper] = useState<AdvisorWhisper | null>(null);
   const [aiModeLabel, setAiModeLabel] = useState('Royal War-Council Tactician');
 
-  // Reddit / Persistence state
   const [streak, setStreak] = useState<number>(() => loadLocal('empire:streak', 0));
   const [lastWinDate, setLastWinDate] = useState<string>(() => loadLocal('empire:lastWinDate', ''));
   const [bestScore, setBestScore] = useState<number | null>(() =>
@@ -144,7 +150,6 @@ export default function App() {
     fastestCommander: null,
   });
 
-  // Post-match Result Card state
   const [epigraph, setEpigraph] = useState('Sound the horn and march across the ford!');
   const [commentStatus, setCommentStatus] = useState<
     'idle' | 'posting' | 'posted' | 'copied' | 'error'
@@ -152,14 +157,6 @@ export default function App() {
   const completionHandledRef = useRef<string>('');
   const matchIdRef = useRef(0);
 
-  // Detect Royal War-Council Tactician & optional local browser LanguageModel capability
-  useEffect(() => {
-    void detectHybridAICapability().then((cap) => {
-      setAiModeLabel(cap.modeLabel);
-    });
-  }, []);
-
-  // Devvit handshake + fetch Today's War Room
   const fetchWarRoom = useCallback(async () => {
     if (isLocal) return;
     try {
@@ -178,11 +175,14 @@ export default function App() {
         setRank(data.player.rank ?? null);
       }
     } catch {
-      /* offline preview */
+      return;
     }
   }, [dailySpec.dateKey]);
 
-  useEffect(() => {
+  useMountTask(() => {
+    void detectHybridAICapability().then((cap) => {
+      setAiModeLabel(cap.modeLabel);
+    });
     if (!isLocal) {
       void fetch('/api/ping', {
         method: 'POST',
@@ -191,13 +191,14 @@ export default function App() {
       }).catch(() => undefined);
       void fetchWarRoom();
     }
-  }, [fetchWarRoom]);
+  });
 
   const startSkirmish = useCallback(
     (spec: SkirmishSpec) => {
       unlockAudio();
       matchIdRef.current += 1;
       completionHandledRef.current = '';
+      accRef.current = 0;
       setActiveSpec(spec);
       const next = createInitialState(spec);
       if (community.fastestCommander) {
@@ -210,7 +211,6 @@ export default function App() {
       }
       stateRef.current = next;
       setSnapshot(makeSnapshot(next));
-      // Pre-select the idle villager so the player can tap Gold immediately in 1 tap!
       const idleV = next.units.find(
         (u) => u.team === 'player' && u.kind === 'villager' && u.order.type === 'idle',
       );
@@ -226,154 +226,205 @@ export default function App() {
     [community.fastestCommander],
   );
 
-  // Fixed-timestep 20Hz simulation loop when in 'game'
-  useEffect(() => {
-    if (screen !== 'game') return;
-    let raf = 0;
-    let lastMs = performance.now();
-    let acc = 0;
-    const STEP = 0.05; // 20 ticks/sec deterministic RTS step
+  const handleMatchCompletion = useCallback(
+    (st: GameState) => {
+      if (st.outcome === 'playing') return;
+      const key = `${matchIdRef.current}:${st.outcome}`;
+      if (completionHandledRef.current === key) return;
+      completionHandledRef.current = key;
 
-    const loop = (nowMs: number) => {
-      const elapsed = Math.min(0.2, (nowMs - lastMs) / 1000);
-      lastMs = nowMs;
-      acc += elapsed;
-
-      const st = stateRef.current;
-      let stepped = false;
-      while (acc >= STEP && st.outcome === 'playing') {
-        stepGame(st, STEP);
-        acc -= STEP;
-        stepped = true;
-      }
-      if (st.soundEvents.length > 0) {
-        flushStateSounds(st.soundEvents);
-      }
-
-      if (stepped && (st.tick % 3 === 0 || st.outcome !== 'playing')) {
-        setSnapshot(makeSnapshot(st));
-        // Prune dead units from selection
-        setSelectedUnitIds((prev) => {
-          if (prev.length === 0) return prev;
-          const alive = prev.filter((id) => st.units.some((u) => u.id === id && u.team === 'player' && u.hp > 0));
-          return alive.length === prev.length ? prev : alive;
-        });
+      const summary = computeScoreSummary(st);
+      let nextStreak = streak;
+      if (summary.victory && !st.spec.isCustom) {
+        if (lastWinDate !== st.spec.dateKey) {
+          const yesterday = new Date(Date.parse(`${st.spec.dateKey}T00:00:00Z`) - 86_400_000)
+            .toISOString()
+            .slice(0, 10);
+          nextStreak = lastWinDate === yesterday ? streak + 1 : 1;
+          setStreak(nextStreak);
+          setLastWinDate(st.spec.dateKey);
+          saveLocal('empire:streak', nextStreak);
+          saveLocal('empire:lastWinDate', st.spec.dateKey);
+        }
+        const updatedBest = Math.max(bestScore ?? 0, summary.score);
+        setBestScore(updatedBest);
+        saveLocal(`empire:best:${st.spec.dateKey}`, updatedBest);
       }
 
-      if (stepped && st.tick % 90 === 0 && st.outcome === 'playing') {
-        setWhisper(getInstantAdvisorWhisper(st));
-      }
+      void composeBattleEpigraph(st, Math.max(1, nextStreak)).then((res) => {
+        setEpigraph(res.epigraph);
+      });
 
-      // Handle Victory / Defeat once per match
-      if (st.outcome !== 'playing') {
-        const key = `${matchIdRef.current}:${st.outcome}`;
-        if (completionHandledRef.current !== key) {
-          completionHandledRef.current = key;
-          const summary = computeScoreSummary(st);
-          let nextStreak = streak;
-          if (summary.victory && !st.spec.isCustom) {
-            if (lastWinDate !== st.spec.dateKey) {
-              const yesterday = new Date(Date.parse(`${st.spec.dateKey}T00:00:00Z`) - 86_400_000)
-                .toISOString()
-                .slice(0, 10);
-              nextStreak = lastWinDate === yesterday ? streak + 1 : 1;
-              setStreak(nextStreak);
-              setLastWinDate(st.spec.dateKey);
-              saveLocal('empire:streak', nextStreak);
-              saveLocal('empire:lastWinDate', st.spec.dateKey);
-            }
-            const updatedBest = Math.max(bestScore ?? 0, summary.score);
-            setBestScore(updatedBest);
-            saveLocal(`empire:best:${st.spec.dateKey}`, updatedBest);
-          }
-
-          void composeBattleEpigraph(st, Math.max(1, nextStreak)).then((res) => {
-            setEpigraph(res.epigraph);
-          });
-
-          if (!isLocal) {
-            journeys.end(summary.victory, summary.timeSec);
-            if (!st.spec.isCustom) {
-              void fetch('/api/empire/complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  dateKey: st.spec.dateKey,
-                  victory: summary.victory,
-                  score: summary.score,
-                  timeSec: summary.timeSec,
-                  crowns: summary.crowns,
-                  strategy: summary.strategyLabel,
-                  wololos: st.stats.wololoConversions,
-                }),
-              })
-                .then((r) => r.json())
-                .then(
-                  (data: {
-                    leaderboard?: LeaderboardRow[];
-                    community?: CommunityWarStats;
-                    rank?: number | null;
-                    streak?: number;
-                    flairAwarded?: string | null;
-                  }) => {
-                    if (data.leaderboard) setLeaderboard(data.leaderboard);
-                    if (data.community) setCommunity(data.community);
-                    if (data.rank !== undefined) setRank(data.rank);
-                    if (typeof data.streak === 'number') setStreak(data.streak);
-                    if (data.flairAwarded) setFlairText(data.flairAwarded);
-                  },
-                )
-                .catch(() => undefined);
-            }
-          }
+      if (!isLocal) {
+        journeys.end(summary.victory, summary.timeSec);
+        if (!st.spec.isCustom) {
+          void fetch('/api/empire/complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dateKey: st.spec.dateKey,
+              victory: summary.victory,
+              score: summary.score,
+              timeSec: summary.timeSec,
+              crowns: summary.crowns,
+              strategy: summary.strategyLabel,
+              wololos: st.stats.wololoConversions,
+            }),
+          })
+            .then((r) => r.json())
+            .then(
+              (data: {
+                leaderboard?: LeaderboardRow[];
+                community?: CommunityWarStats;
+                rank?: number | null;
+                streak?: number;
+                flairAwarded?: string | null;
+              }) => {
+                if (data.leaderboard) setLeaderboard(data.leaderboard);
+                if (data.community) setCommunity(data.community);
+                if (data.rank !== undefined) setRank(data.rank);
+                if (typeof data.streak === 'number') setStreak(data.streak);
+                if (data.flairAwarded) setFlairText(data.flairAwarded);
+              },
+            )
+            .catch(() => undefined);
         }
       }
+    },
+    [streak, lastWinDate, bestScore],
+  );
 
-      raf = requestAnimationFrame(loop);
-    };
+  useFixedSimulationLoop(screen === 'game', gameSpeed, (elapsedSec) => {
+    const st = stateRef.current;
+    if (st.outcome !== 'playing') {
+      accRef.current = 0;
+    } else {
+      accRef.current += elapsedSec;
+    }
 
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [screen, streak, lastWinDate, bestScore]);
+    const STEP = 0.05;
+    let stepped = false;
+    while (accRef.current >= STEP && st.outcome === 'playing') {
+      stepGame(st, STEP);
+      accRef.current -= STEP;
+      stepped = true;
+    }
+    if (st.soundEvents.length > 0) {
+      flushStateSounds(st.soundEvents);
+    }
 
-  // Nostalgic Desktop RTS Hotkeys
-  useEffect(() => {
-    if (screen !== 'game') return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      const st = stateRef.current;
-      if (e.key === 'Escape') {
-        setPlacementKind(null);
-        return;
+    if (stepped && (st.tick % 3 === 0 || st.outcome !== 'playing')) {
+      setSnapshot(makeSnapshot(st));
+      setSelectedUnitIds((prev) => {
+        if (prev.length === 0) return prev;
+        const alive = prev.filter((id) =>
+          st.units.some((u) => u.id === id && u.team === 'player' && u.hp > 0),
+        );
+        return alive.length === prev.length ? prev : alive;
+      });
+    }
+
+    if (stepped && st.tick % 90 === 0 && st.outcome === 'playing') {
+      setWhisper(getInstantAdvisorWhisper(st));
+    }
+
+    if (st.outcome !== 'playing') {
+      handleMatchCompletion(st);
+    }
+  });
+
+  useWindowKeydown(screen === 'game', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    const st = stateRef.current;
+
+    if (isLocal && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'v') {
+      e.preventDefault();
+      if (st.outcome !== 'playing') return;
+      const enemyTc = st.buildings.find(
+        (b) => b.team === 'enemy' && b.kind === 'town_center' && b.hp > 0,
+      );
+      if (enemyTc) {
+        enemyTc.hp = 1;
+        st.units.push({
+          id: st.nextId++,
+          team: 'player',
+          kind: 'knight',
+          x: enemyTc.tileX + 1,
+          y: enemyTc.tileY + enemyTc.size + 0.35,
+          hp: 138,
+          maxHp: 138,
+          order: { type: 'attack_building', buildingId: enemyTc.id },
+          path: [],
+          pathCooldown: 0,
+          attackTimer: 0,
+          harvestTimer: 0,
+          carryKind: null,
+          carryAmount: 0,
+          convertTargetId: null,
+          convertProgress: 0,
+          monkCooldown: 0,
+          facing: 1,
+          animPhase: 0,
+        });
+        st.timeSec = 111.95;
+        st.stats.wololoConversions = 2;
+        st.stats.cheekyWololo = true;
+        st.stats.enemyUnitsSlain = 9;
+        st.stats.enemyBuildingsRazed = 1;
+        stepGame(st, 0.05);
       }
-      if (e.key === '1') {
-        const ids = st.units.filter((u) => u.team === 'player' && u.kind !== 'villager').map((u) => u.id);
-        setSelectedUnitIds(ids);
-        setSelectedBuildingId(null);
-      } else if (e.key === '2') {
-        const idle = st.units.filter((u) => u.team === 'player' && u.kind === 'villager' && u.order.type === 'idle');
-        const pool = idle.length > 0 ? idle : st.units.filter((u) => u.team === 'player' && u.kind === 'villager');
-        setSelectedUnitIds(pool.map((u) => u.id));
-        setSelectedBuildingId(null);
-      } else if (e.key === '3') {
-        const monks = st.units.filter((u) => u.team === 'player' && u.kind === 'monk').map((u) => u.id);
-        if (monks.length > 0) setSelectedUnitIds(monks);
-      } else {
-        const buildMap: Record<string, BuildingKind> = {
-          q: 'homestead',
-          w: 'barracks',
-          e: 'archery_range',
-          r: 'stable',
-          t: 'monastery',
-          y: 'watchtower',
-        };
-        const bk = buildMap[e.key.toLowerCase()];
-        if (bk) setPlacementKind((prev) => (prev === bk ? null : bk));
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [screen]);
+      st.outcome = 'victory';
+      st.timeSec = 112;
+      st.stats.wololoConversions = 2;
+      st.stats.cheekyWololo = true;
+      st.stats.enemyUnitsSlain = 9;
+      st.stats.enemyBuildingsRazed = 2;
+      flushStateSounds(st.soundEvents);
+      setSnapshot(makeSnapshot(st));
+      handleMatchCompletion(st);
+      return;
+    }
+
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    if (e.key === 'Escape') {
+      setPlacementKind(null);
+      return;
+    }
+    if (e.key === '1') {
+      const ids = st.units
+        .filter((u) => u.team === 'player' && u.hp > 0 && u.kind !== 'villager')
+        .map((u) => u.id);
+      setSelectedUnitIds(ids);
+      setSelectedBuildingId(null);
+    } else if (e.key === '2') {
+      const idle = st.units.filter(
+        (u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager' && u.order.type === 'idle',
+      );
+      const pool =
+        idle.length > 0
+          ? idle
+          : st.units.filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager');
+      setSelectedUnitIds(pool.map((u) => u.id));
+      setSelectedBuildingId(null);
+    } else if (e.key === '3') {
+      const monks = st.units
+        .filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'monk')
+        .map((u) => u.id);
+      if (monks.length > 0) setSelectedUnitIds(monks);
+    } else {
+      const buildMap: Record<string, BuildingKind> = {
+        q: 'homestead',
+        w: 'barracks',
+        e: 'archery_range',
+        r: 'stable',
+        t: 'monastery',
+        y: 'watchtower',
+      };
+      const bk = buildMap[e.key.toLowerCase()];
+      if (bk) setPlacementKind((prev) => (prev === bk ? null : bk));
+    }
+  });
 
   const handleSelectSquad = (kind: 'idle_villager' | 'all_villagers' | 'all_army' | 'monks') => {
     unlockAudio();
@@ -559,6 +610,8 @@ export default function App() {
         placementKind={placementKind}
         whisper={whisper}
         muted={muted}
+        gameSpeed={gameSpeed}
+        onToggleSpeed={() => setGameSpeed((s) => (s === 1 ? 1.5 : 1))}
         onToggleMute={() => {
           const next = !muted;
           setMutedState(next);

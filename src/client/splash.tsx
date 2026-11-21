@@ -1,9 +1,10 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { generateDailySpec } from '../engine/dailyGenerator.js';
 import { BIOMES, CIVS, DAILY_MODIFIERS, type BiomeDef } from '../types/rts.js';
 import { CivCrest, EmpireIcon } from '../ui/EmpireIcons.js';
+import { useMountTask } from './hooks.js';
 import { journeys } from './telemetry.js';
 
 const isLocalSplash = ['localhost', '127.0.0.1'].includes(window.location.hostname);
@@ -321,7 +322,7 @@ function Splash() {
   const mins = Math.floor(spec.parSec / 60);
   const secs = String(spec.parSec % 60).padStart(2, '0');
 
-  useEffect(() => {
+  useMountTask(() => {
     if (isLocalSplash) return;
     const ctrl = new AbortController();
     fetch('/api/empire/daily?date=' + encodeURIComponent(spec.dateKey), {
@@ -341,7 +342,7 @@ function Splash() {
       })
       .catch(() => undefined);
     return () => ctrl.abort();
-  }, [spec.dateKey]);
+  });
 
   return (
     <div className="pe-splash">

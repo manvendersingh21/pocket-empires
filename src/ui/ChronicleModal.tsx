@@ -253,6 +253,7 @@ export function ChronicleModal({
       <style>{CHRONICLE_CSS}</style>
 
       <div
+        data-testid="chronicle-modal"
         className="pe-chronicle-card"
         style={{
           borderColor: summary.victory ? '#d49b35' : '#991b1b',
@@ -566,6 +567,7 @@ export function ChronicleModal({
         <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', marginTop: '2px' }}>
           <button
             type="button"
+            data-testid="chronicle-post-btn"
             className="pe-reddit-cta"
             disabled={commentStatus === 'posting' || commentStatus === 'posted'}
             onClick={onPostComment}

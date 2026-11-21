@@ -13,6 +13,7 @@
  *   4. REPO_ISOLATION
  *   5. ZERO_TOFU_GLYPHS
  *   6. NO_SLOP_COMMENTS_OR_TIMING_HACKS
+ *   7. NO_RAW_USE_EFFECT_IN_PRODUCT
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -338,7 +339,7 @@ function extractFunctionCalls(strippedCode, fnName) {
 }
 
 /**
- * Runs all 6 architectural & static invariant checks across the repository.
+ * Runs all 7 architectural & static invariant checks across the repository.
  * @returns {{ violations: Array<{ ruleId: string, file: string, line: number, failed: string, fix: string }>, stats: Record<string, number> }}
  */
 export function runInvariantChecks() {
@@ -351,6 +352,7 @@ export function runInvariantChecks() {
     REPO_ISOLATION: 0,
     ZERO_TOFU_GLYPHS: 0,
     NO_SLOP_COMMENTS_OR_TIMING_HACKS: 0,
+    NO_RAW_USE_EFFECT_IN_PRODUCT: 0,
   };
 
   const report = (ruleId, file, line, failed, fix) => {
@@ -543,11 +545,10 @@ export function runInvariantChecks() {
   // -------------------------------------------------------------------------
   // 6. NO_SLOP_COMMENTS_OR_TIMING_HACKS
   //    Ban // HACK, // WORKAROUND, // DO NOT DELETE, // FIXME across src/,
-  //    and ban setTimeout( in src/engine/, src/rendering/, src/client/
-  //    (plus unapproved setTimeout( in src/ui/ outside bounded toast cleanup).
+  //    and ban setTimeout( across src/engine/, src/rendering/, src/client/,
+  //    and src/ui/ (only src/ai/hybridAdvisor.ts bounded inference timeout is permitted).
   // -------------------------------------------------------------------------
   const slopCommentRe = /\b(HACK|WORKAROUND|FIXME)\b|DO\s+NOT\s+DELETE/i;
-  const strictNoTimeoutPrefixes = ['src/engine/', 'src/rendering/', 'src/client/'];
 
   for (const [, info] of parsedFiles) {
     stats.NO_SLOP_COMMENTS_OR_TIMING_HACKS++;
@@ -566,27 +567,85 @@ export function runInvariantChecks() {
       }
     }
 
-    const inStrictNoTimeout = strictNoTimeoutPrefixes.some((p) => info.rel.startsWith(p));
-    const inUiLayer = info.rel.startsWith('src/ui/');
-    if (inStrictNoTimeout || inUiLayer) {
-      const setTimeoutRe = /\bsetTimeout\s*\(/g;
-      let tm;
-      while ((tm = setTimeoutRe.exec(info.stripped)) !== null) {
-        const line = lineAtOffset(info.stripped, tm.index);
-        const rawLine = info.raw.split('\n')[line - 1] ?? '';
+    const setTimeoutRe = /\bsetTimeout\s*\(/g;
+    let tm;
+    while ((tm = setTimeoutRe.exec(info.stripped)) !== null) {
+      const line = lineAtOffset(info.stripped, tm.index);
+      const rawLine = info.raw.split('\n')[line - 1] ?? '';
 
-        // Approved bounded clipboard feedback toast reset in src/ui/ (<= 2500ms)
-        if (inUiLayer && /setCopiedCode\s*\(\s*false\s*\)\s*,\s*(\d+)/.test(rawLine)) {
-          const delayMs = Number(RegExp.$1);
-          if (delayMs > 0 && delayMs <= 2500) continue;
+      // Only bounded local-model inference timeout in src/ai/hybridAdvisor.ts is permitted
+      if (
+        info.rel === 'src/ai/hybridAdvisor.ts' &&
+        /resolve\s*\(\s*fallback\s*\)\s*,\s*ms/.test(rawLine)
+      ) {
+        continue;
+      }
+
+      report(
+        'NO_SLOP_COMMENTS_OR_TIMING_HACKS',
+        info.rel,
+        line,
+        `Banned imperative timer setTimeout(...) in ${info.rel}`,
+        'Advance simulation timers deterministically via stepGame(state, dt) in src/engine/sim.ts and drive visual animations via requestAnimationFrame timestamps in src/rendering/IsoCanvas.tsx or CSS animations (only bounded inference timeout in src/ai/hybridAdvisor.ts is permitted).',
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 7. NO_RAW_USE_EFFECT_IN_PRODUCT
+  //    Scans product UI & app entry files (src/ui/*.tsx, src/client/App.tsx,
+  //    src/client/splash.tsx) and forbids importing or calling useEffect directly.
+  // -------------------------------------------------------------------------
+  const noRawUseEffectFix =
+    'Direct useEffect is prohibited in product UI components. Compute derived state synchronously during render, or use vetted lifecycle primitives in src/client/hooks.ts (useMountTask, useFixedSimulationLoop, useWindowKeydown).';
+
+  for (const [, info] of parsedFiles) {
+    const isProductUiFile =
+      (info.rel.startsWith('src/ui/') && info.rel.endsWith('.tsx')) ||
+      info.rel === 'src/client/App.tsx' ||
+      info.rel === 'src/client/splash.tsx';
+    if (!isProductUiFile) continue;
+
+    stats.NO_RAW_USE_EFFECT_IN_PRODUCT++;
+    const reportedLines = new Set();
+
+    // 1. Direct import of useEffect from 'react'
+    const reactNamedImportRe =
+      /\bimport\s+(?:type\s+)?(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*(['"])react\2/g;
+    let im;
+    while ((im = reactNamedImportRe.exec(info.stripped)) !== null) {
+      const clause = im[1];
+      const ueMatch = /\buseEffect\b/.exec(clause);
+      if (ueMatch) {
+        const clauseStart = im.index + im[0].indexOf(clause);
+        const line = lineAtOffset(info.stripped, clauseStart + ueMatch.index);
+        if (!reportedLines.has(line)) {
+          reportedLines.add(line);
+          report(
+            'NO_RAW_USE_EFFECT_IN_PRODUCT',
+            info.rel,
+            line,
+            'Forbidden direct useEffect import in product UI module',
+            noRawUseEffectFix,
+          );
         }
+      }
+    }
 
+    // 2. Direct call or React namespace / destructured access to useEffect
+    const useEffectUsageRe =
+      /\b(?:React\s*\.\s*useEffect\b|useEffect\s*\()|\{[^}\n]*\buseEffect\b[^}\n]*\}\s*=\s*React\b/g;
+    let um;
+    while ((um = useEffectUsageRe.exec(info.stripped)) !== null) {
+      const line = lineAtOffset(info.stripped, um.index);
+      if (!reportedLines.has(line)) {
+        reportedLines.add(line);
         report(
-          'NO_SLOP_COMMENTS_OR_TIMING_HACKS',
+          'NO_RAW_USE_EFFECT_IN_PRODUCT',
           info.rel,
           line,
-          `Banned imperative timer setTimeout(...) in ${info.rel}`,
-          'Advance simulation timers deterministically via stepGame(state, dt) in src/engine/sim.ts and drive visual animations via requestAnimationFrame timestamps in src/rendering/IsoCanvas.tsx or CSS animations.',
+          'Forbidden direct useEffect(...) usage in product UI module',
+          noRawUseEffectFix,
         );
       }
     }
@@ -622,5 +681,5 @@ if (isMain) {
     );
   }
   console.log('================================================================================');
-  console.log('check-invariants PASS — 0 violations across all 6 High-Trust Playbook rules!');
+  console.log('check-invariants PASS — 0 violations across all 7 High-Trust Playbook rules!');
 }

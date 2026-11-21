@@ -8,6 +8,7 @@ import {
 import {
   decodeSkirmishCode,
   encodeSkirmishCode,
+  generateDailySpec,
 } from '../engine/dailyGenerator.js';
 import { CivCrest, EmpireIcon, stripEmoji } from './EmpireIcons.js';
 
@@ -54,6 +55,15 @@ function formatMmSs(totalSec: number): string {
   const mins = Math.floor(s / 60);
   const secs = String(s % 60).padStart(2, '0');
   return `${mins}:${secs}`;
+}
+
+function shiftDateKey(dateKey: string, deltaDays: number): string {
+  const parts = dateKey.split('-').map(Number);
+  const baseUtc =
+    parts.length === 3 && parts.every((n) => Number.isFinite(n))
+      ? Date.UTC(parts[0], parts[1] - 1, parts[2])
+      : Date.now();
+  return new Date(baseUtc + deltaDays * 86_400_000).toISOString().slice(0, 10);
 }
 
 function tryDecodeChallengeInput(
@@ -316,12 +326,17 @@ export function WarRoomScreen({
   const [codeInput, setCodeInput] = useState('');
   const [crafting, setCrafting] = useState(false);
   const [craftError, setCraftError] = useState<string | null>(null);
-  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedCodeValue, setCopiedCodeValue] = useState<string | null>(null);
   const [crafted, setCrafted] = useState<{
     spec: SkirmishSpec;
     shareCode: string;
     flavorSummary: string;
   } | null>(null);
+
+  const copiedCode = crafted !== null && copiedCodeValue === crafted.shareCode;
+  const pastSieges = [1, 2, 3, 4].map((daysAgo) =>
+    generateDailySpec(shiftDateKey(dailySpec.dateKey, -daysAgo)),
+  );
 
   const biome = BIOMES[dailySpec.biome];
   const playerCiv = CIVS[dailySpec.playerCiv];
@@ -332,9 +347,8 @@ export function WarRoomScreen({
     const trimmed = rawText.trim();
     if (!trimmed) return;
     setCraftError(null);
-    setCopiedCode(false);
+    setCopiedCodeValue(null);
 
-    // Instant local decode if input contains a PE-... Challenge Code
     const directDecoded = tryDecodeChallengeInput(trimmed);
     if (directDecoded) {
       setCrafted(directDecoded);
@@ -355,7 +369,7 @@ export function WarRoomScreen({
   const handleCodeChange = (val: string) => {
     setCodeInput(val);
     setCraftError(null);
-    setCopiedCode(false);
+    setCopiedCodeValue(null);
     const decoded = tryDecodeChallengeInput(val);
     if (decoded) {
       setCrafted(decoded);
@@ -365,10 +379,9 @@ export function WarRoomScreen({
   const handleCopyShareCode = async (code: string) => {
     try {
       await navigator.clipboard.writeText(code);
-      setCopiedCode(true);
-      window.setTimeout(() => setCopiedCode(false), 1800);
+      setCopiedCodeValue(code);
     } catch {
-      setCopiedCode(false);
+      setCopiedCodeValue(null);
     }
   };
 
@@ -1001,6 +1014,125 @@ export function WarRoomScreen({
                   );
                 })
               )}
+
+              {/* Past Daily Chronicles (Practice Archive) */}
+              <div
+                style={{
+                  marginTop: '6px',
+                  paddingTop: '8px',
+                  borderTop: '1px solid #352b20',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '5px',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '6px',
+                    flexWrap: 'wrap',
+                    padding: '0 2px 2px',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontSize: '11px',
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.07em',
+                      color: '#f5b942',
+                    }}
+                  >
+                    <EmpireIcon name="scroll" size={13} />
+                    <span>Past Daily Chronicles · Practice Archive</span>
+                  </span>
+                  <span style={{ fontSize: '10.5px', color: '#9c8b70', fontWeight: 600 }}>
+                    Unranked Skirmishes
+                  </span>
+                </div>
+
+                {pastSieges.map((pastSpec, idx) => {
+                  const pCiv = CIVS[pastSpec.playerCiv];
+                  const eCiv = CIVS[pastSpec.enemyCiv];
+                  const pastBiome = BIOMES[pastSpec.biome];
+                  const pastDecree = DAILY_MODIFIERS[pastSpec.modifier];
+                  return (
+                    <div
+                      key={pastSpec.dateKey}
+                      className="pe-tabular"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        padding: '6px 9px',
+                        borderRadius: '7px',
+                        background: '#19140e',
+                        border: '1px solid #362c20',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          minWidth: 0,
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <span style={{ fontWeight: 800, color: '#f5b942' }}>
+                          Siege #{pastSpec.puzzleNumber}
+                        </span>
+                        <span style={{ color: '#f5ecd8', fontWeight: 700 }}>
+                          · {pastSpec.mapName}
+                        </span>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            color: '#cbbba0',
+                          }}
+                        >
+                          · <CivCrest civ={pastSpec.playerCiv} size={13} />
+                          <span>{pCiv.name} vs</span>
+                          <CivCrest civ={pastSpec.enemyCiv} size={13} />
+                          <span>{eCiv.name}</span>
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '10.5px',
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            background: '#241d16',
+                            border: '1px solid #443729',
+                            color: '#d9cbb3',
+                          }}
+                        >
+                          {pastBiome.name} · {pastDecree.name}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        data-testid={`archive-play-${idx}`}
+                        className="pe-bevel-btn"
+                        style={{ padding: '5px 10px', fontSize: '11.5px', flexShrink: 0 }}
+                        onClick={() => onPlayCustomSpec({ ...pastSpec, isCustom: true })}
+                      >
+                        <EmpireIcon name="swords" size={12} />
+                        <span>Practice</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1019,6 +1151,7 @@ export function WarRoomScreen({
                   onChange={(e) => {
                     const val = e.target.value;
                     setPromptInput(val);
+                    setCopiedCodeValue(null);
                     const instant = tryDecodeChallengeInput(val);
                     if (instant) {
                       setCraftError(null);

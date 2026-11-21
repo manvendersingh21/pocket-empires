@@ -41,6 +41,13 @@
     "selectorRoleOrText": "role=button[name=\"Forge\"s]",
     "description": "Submit button that compiles the forge prompt into an A*-walkability-verified SkirmishSpec and PE-... share code."
   },
+  "war_room_archive_play": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "[data-testid=\"archive-play-0\"]",
+    "description": "Practice Archive launch button in the War Room allowing commanders to replay deterministic past Daily Sieges."
+  },
   "hud_resource_ledger": {
     "route": "/game.html#game",
     "component": "EmpireHud",
@@ -61,6 +68,20 @@
     "file": "src/ui/EmpireHud.tsx",
     "selectorRoleOrText": "role=button[name=\"Taunts\"s]",
     "description": "Top-right brass war-horn icon button toggling the classic Age-of-Empires taunt popover (30 Wololo!, 11, 14, 1)."
+  },
+  "hud_speed_toggle": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-speed-toggle\"]",
+    "description": "Top ledger simulation speed toggle button switching active RTS pace between 1× and 1.5×."
+  },
+  "hud_onboarding_steps": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-onboarding-steps\"]",
+    "description": "Tactile onboarding objective strip guiding commanders through opening economy, build, and assault steps."
   },
   "squad_idle_villager": {
     "route": "/game.html#game",
@@ -103,5 +124,12 @@
     "file": "src/rendering/IsoCanvas.tsx",
     "selectorRoleOrText": "main canvas >> nth=1",
     "description": "Interactive top-right isometric diamond minimap canvas showing terrain, fog of war, empires, and camera viewport frustum."
+  },
+  "chronicle_modal": {
+    "route": "/game.html#game",
+    "component": "ChronicleModal",
+    "file": "src/ui/ChronicleModal.tsx",
+    "selectorRoleOrText": "[data-testid=\"chronicle-modal\"]",
+    "description": "End-state Siege Chronicle modal displaying 1-3 earned Crowns, clear time vs Par, battle epigraph, and Post War Chronicle to Comments CTA."
   }
 }

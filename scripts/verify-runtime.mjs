@@ -3,16 +3,18 @@
  * Pocket Empires — Headless Chromium Runtime & Feature-Map Verifier
  *
  * Implements Layer 3 of the High-Trust Agent Engineering Playbook:
- *  - Loads & validates `FEATURE_MAP.json` (all 15 user-facing selectors + source file links)
+ *  - Loads & validates `FEATURE_MAP.json` (all 19 user-facing selectors + source file links)
  *  - Serves `dist/client` on an ephemeral local HTTP port (`127.0.0.1:0`)
  *  - Launches `/usr/bin/chromium` via `playwright-core`
  *  - Verifies Splash (`560x420` & `360x380`) with strict zero scroll overflow (`scrollHeight <= clientHeight + 1`)
  *  - Verifies Desktop (`1280x800`) and Mobile (`390x844`) end-to-end flows:
- *      War Room -> Skirmish Forge craft -> Play Daily -> Build mode ghost -> Scout Advisor -> Taunt popover
+ *      War Room + Practice Archive -> Skirmish Forge craft -> Play Daily -> Onboarding + Speed Toggle ->
+ *      Build mode ghost -> Scout Advisor -> Taunt popover -> Desktop Victory ChronicleModal (`Control+Shift+V`)
+ *  - Saves optional PNG screenshot artifacts when `--screenshots <dir>` is passed
  *  - Asserts `0` console errors and `0` uncaught page errors across every viewport
  *  - Prints a structured PASS table
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,15 +33,19 @@ const REQUIRED_FEATURES = [
   'skirmish_forge_tab',
   'forge_prompt_input',
   'forge_craft_btn',
+  'war_room_archive_play',
   'hud_resource_ledger',
   'hud_scout_advisor_btn',
   'hud_taunt_btn',
+  'hud_speed_toggle',
+  'hud_onboarding_steps',
   'squad_idle_villager',
   'squad_all_army',
   'squad_siege_keep',
   'dock_mode_train',
   'dock_mode_build',
   'minimap_canvas',
+  'chronicle_modal',
 ];
 
 const MIME_TYPES = {
@@ -61,6 +67,31 @@ function assertCondition(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+/**
+ * Parses optional `--screenshots <dir>` or `--screenshots=<dir>` CLI flag.
+ * @param {string[]} argv
+ * @returns {string | null}
+ */
+function parseScreenshotsDir(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--screenshots') {
+      const next = argv[i + 1];
+      assertCondition(
+        typeof next === 'string' && next.trim().length > 0 && !next.startsWith('--'),
+        'Expected directory path after "--screenshots".',
+      );
+      return path.resolve(next.trim());
+    }
+    if (arg.startsWith('--screenshots=')) {
+      const val = arg.slice('--screenshots='.length).trim();
+      assertCondition(val.length > 0, 'Expected non-empty directory path in "--screenshots=<dir>".');
+      return path.resolve(val);
+    }
+  }
+  return null;
 }
 
 /**
@@ -191,7 +222,7 @@ async function waitAnimationFrames(page, count = 2) {
  * Verifies `/splash.html` at a given viewport (`560x420` or `360x380`), asserting
  * `scrollHeight <= clientHeight + 1`, visible CTA within viewport bounds, and 0 errors.
  */
-async function verifySplashViewport(browser, baseUrl, featureMap, viewport, label) {
+async function verifySplashViewport(browser, baseUrl, featureMap, viewport, label, screenshotsDir) {
   const startedAt = performance.now();
   const context = await browser.newContext({
     viewport,
@@ -205,6 +236,12 @@ async function verifySplashViewport(browser, baseUrl, featureMap, viewport, labe
     const playCta = page.locator(featureMap.splash_play_cta.selectorRoleOrText);
     await playCta.waitFor({ state: 'visible', timeout: 8000 });
     await waitAnimationFrames(page, 2);
+
+    if (screenshotsDir) {
+      await page.screenshot({
+        path: path.join(screenshotsDir, `splash-${viewport.width}x${viewport.height}.png`),
+      });
+    }
 
     const metrics = await page.evaluate(() => {
       const doc = document.documentElement;
@@ -272,11 +309,13 @@ async function verifySplashViewport(browser, baseUrl, featureMap, viewport, labe
 }
 
 /**
- * Exercises the full War Room -> Skirmish Forge craft -> Play Daily -> Build mode ghost ->
- * Scout Advisor -> Taunt popover journey on Desktop (`1280x800`) or Mobile (`390x844`).
+ * Exercises the full War Room + Practice Archive -> Skirmish Forge craft -> Play Daily ->
+ * Onboarding + Speed Toggle -> Build mode ghost -> Scout Advisor -> Taunt popover ->
+ * Desktop End-State Victory ChronicleModal (`Control+Shift+V`) journey.
  */
 async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
-  const { label, viewport, isMobile } = opts;
+  const { label, viewport, isMobile, screenshotsDir } = opts;
+  const shotPrefix = isMobile ? 'mobile' : 'desktop';
   const startedAt = performance.now();
   const context = await browser.newContext({
     viewport,
@@ -292,10 +331,18 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
   try {
     await page.goto(`${baseUrl}/game.html`, { waitUntil: 'domcontentloaded' });
 
-    // 1. War Room initial state
+    // 1. War Room initial state + Practice Archive of past daily sieges
     await loc('war_room_play_daily').waitFor({ state: 'visible', timeout: 8000 });
     await loc('war_room_ranks_tab').waitFor({ state: 'visible', timeout: 5000 });
     await loc('skirmish_forge_tab').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('war_room_archive_play').waitFor({ state: 'visible', timeout: 5000 });
+
+    if (screenshotsDir) {
+      await waitAnimationFrames(page, 2);
+      await page.screenshot({
+        path: path.join(screenshotsDir, `${shotPrefix}-war-room.png`),
+      });
+    }
 
     // 2. Skirmish Forge craft flow
     await loc('skirmish_forge_tab').click();
@@ -326,20 +373,63 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       (await loc('war_room_ranks_tab').getAttribute('aria-pressed')) === 'true',
       `${label}: war_room_ranks_tab did not activate aria-pressed="true".`,
     );
+    await loc('war_room_archive_play').waitFor({ state: 'visible', timeout: 5000 });
     await loc('war_room_play_daily').click();
 
-    // 3. Play Daily — HUD, Isometric Canvas, Diamond Minimap & Squad Controls
+    // 3. Play Daily — HUD, Onboarding Steps, Speed Toggle, Isometric Canvas & Diamond Minimap
     await loc('hud_resource_ledger').waitFor({ state: 'visible', timeout: 8000 });
     await loc('minimap_canvas').waitFor({ state: 'visible', timeout: 5000 });
     await loc('hud_scout_advisor_btn').waitFor({ state: 'visible', timeout: 5000 });
     await loc('hud_taunt_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('hud_onboarding_steps').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('hud_speed_toggle').waitFor({ state: 'visible', timeout: 5000 });
     await loc('squad_idle_villager').waitFor({ state: 'visible', timeout: 5000 });
     await loc('squad_all_army').waitFor({ state: 'visible', timeout: 5000 });
     await loc('squad_siege_keep').waitFor({ state: 'visible', timeout: 5000 });
     await loc('dock_mode_train').waitFor({ state: 'visible', timeout: 5000 });
     await loc('dock_mode_build').waitFor({ state: 'visible', timeout: 5000 });
 
+    // Verify onboarding steps render non-empty guidance and speed toggle transitions 1× -> 1.5×
+    const onboardingText = (await loc('hud_onboarding_steps').innerText()).trim();
+    assertCondition(
+      onboardingText.length > 0,
+      `${label}: Expected non-empty hud_onboarding_steps strip.`,
+    );
+
+    const speedBefore = (await loc('hud_speed_toggle').innerText()).trim();
+    assertCondition(
+      speedBefore.includes('1×') && !speedBefore.includes('1.5×'),
+      `${label}: Expected initial hud_speed_toggle label "1×", got "${speedBefore}".`,
+    );
+    await loc('hud_speed_toggle').click();
+    const speedAfter = (await loc('hud_speed_toggle').innerText()).trim();
+    assertCondition(
+      speedAfter.includes('1.5×'),
+      `${label}: Expected hud_speed_toggle label "1.5×" after click, got "${speedAfter}".`,
+    );
+
     await waitAnimationFrames(page, 3);
+
+    const ledgerOverflow = await page.evaluate(() => {
+      const strip = document.querySelector('.pe-top-ledger > div');
+      const wood = document.querySelector('.pe-res-pill[title="Wood"]');
+      const woodRect = wood ? wood.getBoundingClientRect() : null;
+      return {
+        scrollWidth: strip ? strip.scrollWidth : 0,
+        clientWidth: strip ? strip.clientWidth : 0,
+        woodLeft: woodRect ? Math.round(woodRect.left) : -999,
+      };
+    });
+    assertCondition(
+      ledgerOverflow.scrollWidth <= ledgerOverflow.clientWidth + 1 && ledgerOverflow.woodLeft >= 0,
+      `${label}: Top resource ledger overflowed or clipped Wood pill (${JSON.stringify(ledgerOverflow)}).`,
+    );
+
+    if (screenshotsDir) {
+      await page.screenshot({
+        path: path.join(screenshotsDir, `${shotPrefix}-gameplay-hud.png`),
+      });
+    }
 
     const canvasCheck = await page.evaluate(() => {
       const canvases = Array.from(document.querySelectorAll('main canvas'));
@@ -458,6 +548,38 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
 
     await waitAnimationFrames(page, 2);
 
+    // 7. End-State Victory ChronicleModal on Desktop (1280x800) via Control+Shift+V
+    if (!isMobile) {
+      await page.keyboard.press('Control+Shift+KeyV');
+      const chronicleModal = loc('chronicle_modal');
+      await chronicleModal.waitFor({ state: 'visible', timeout: 5000 });
+
+      const chroniclePostBtn = page.locator('[data-testid="chronicle-post-btn"]');
+      await chroniclePostBtn.waitFor({ state: 'visible', timeout: 5000 });
+      const postBtnText = (await chroniclePostBtn.innerText()).trim();
+      assertCondition(
+        postBtnText.includes('Post War Chronicle to Comments'),
+        `${label}: Expected Chronicle CTA "Post War Chronicle to Comments", got "${postBtnText}".`,
+      );
+
+      const modalText = await chronicleModal.innerText();
+      assertCondition(
+        modalText.includes('VICTORY'),
+        `${label}: Expected Victory headline inside ChronicleModal.`,
+      );
+      assertCondition(
+        !/\p{Extended_Pictographic}/u.test(modalText),
+        `${label}: ChronicleModal leaked raw emoji glyph.`,
+      );
+
+      await waitAnimationFrames(page, 2);
+      if (screenshotsDir) {
+        await page.screenshot({
+          path: path.join(screenshotsDir, 'desktop-chronicle-victory.png'),
+        });
+      }
+    }
+
     assertCondition(
       consoleErrors.length === 0,
       `${label}: Expected 0 console errors, got: ${consoleErrors.join(' | ')}`,
@@ -467,10 +589,14 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       `${label}: Expected 0 page errors, got: ${pageErrors.join(' | ')}`,
     );
 
+    const flowSummary = !isMobile
+      ? `Archive · Forge ${shareCodeText} · 1.5× · Chronicle Victory`
+      : `Archive · Forge ${shareCodeText} · 1.5× · Ghost · Taunt 30`;
+
     return {
       suite: label,
       viewport: `${viewport.width}x${viewport.height}`,
-      detail: `Forge ${shareCodeText} · Build Ghost · Scout · Taunt 30`,
+      detail: flowSummary,
       errors: `${consoleErrors.length} / ${pageErrors.length}`,
       ms: Math.round(performance.now() - startedAt),
       status: 'PASS',
@@ -481,6 +607,11 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
 }
 
 async function main() {
+  const screenshotsDir = parseScreenshotsDir(process.argv.slice(2));
+  if (screenshotsDir) {
+    mkdirSync(screenshotsDir, { recursive: true });
+  }
+
   const featureMap = loadAndValidateFeatureMap();
   assertCondition(
     existsSync(CHROMIUM_PATH),
@@ -514,6 +645,7 @@ async function main() {
         featureMap,
         { width: 560, height: 420 },
         'Splash Feed Card (Standard)',
+        screenshotsDir,
       ),
     );
 
@@ -524,6 +656,7 @@ async function main() {
         featureMap,
         { width: 360, height: 380 },
         'Splash Feed Card (Compact)',
+        screenshotsDir,
       ),
     );
 
@@ -532,6 +665,7 @@ async function main() {
         label: 'Desktop Full Siege Flow',
         viewport: { width: 1280, height: 800 },
         isMobile: false,
+        screenshotsDir,
       }),
     );
 
@@ -540,6 +674,7 @@ async function main() {
         label: 'Mobile Full Siege Flow',
         viewport: { width: 390, height: 844 },
         isMobile: true,
+        screenshotsDir,
       }),
     );
   } finally {
@@ -562,6 +697,9 @@ async function main() {
     );
   }
   console.log('==================================================================================================================');
+  if (screenshotsDir) {
+    console.log(`Saved runtime verification screenshots to ${screenshotsDir}`);
+  }
   console.log(
     `verify-runtime PASS — ${rows.length}/${rows.length} suites passed with 0 console errors & 0 page errors!`,
   );

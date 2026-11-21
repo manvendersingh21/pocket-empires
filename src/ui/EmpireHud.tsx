@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   BUILDINGS,
   CIVS,
@@ -52,6 +52,8 @@ export interface EmpireHudProps {
   onSelectPlacement: (kind: BuildingKind | null) => void;
   onTaunt: (id: TauntId) => void;
   onExitToWarRoom: () => void;
+  gameSpeed?: 1 | 1.5;
+  onToggleSpeed?: () => void;
 }
 
 const TRAINABLE_UNITS: ReadonlyArray<{ kind: UnitKind; icon: EmpireIconName }> = [
@@ -112,11 +114,11 @@ const HUD_CSS = `
 .pe-top-ledger {
   pointer-events: auto;
   height: 44px;
-  padding: 0 8px;
+  padding: 0 5px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 4px;
   background:
     linear-gradient(180deg, #27211b 0%, #17120c 100%);
   border-bottom: 1.5px solid #8c6622;
@@ -124,18 +126,28 @@ const HUD_CSS = `
     inset 0 1px 0 rgba(255, 236, 190, 0.16),
     0 4px 14px rgba(0, 0, 0, 0.65);
 }
+.pe-res-strip {
+  display: flex;
+  align-items: center;
+  gap: 2.5px;
+  min-width: 0;
+}
 .pe-res-pill {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 3px 6px;
-  border-radius: 6px;
+  gap: 2px;
+  padding: 3px 4px;
+  border-radius: 5px;
   background: rgba(15, 11, 7, 0.65);
   border: 1px solid #3c3125;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
+}
+.pe-res-pill svg {
+  width: 12px;
+  height: 12px;
 }
 .pe-res-label {
   display: none;
@@ -144,23 +156,10 @@ const HUD_CSS = `
   color: #bba98c;
   margin-left: 1px;
 }
-@media (min-width: 760px) {
-  .pe-top-ledger {
-    padding: 0 14px;
-  }
-  .pe-res-pill {
-    padding: 4px 9px;
-    font-size: 13px;
-    gap: 5px;
-  }
-  .pe-res-label {
-    display: inline;
-  }
-}
 .pe-icon-btn {
   cursor: pointer;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   border: 1px solid #5c4934;
   background: linear-gradient(180deg, #332a21 0%, #201a14 100%);
@@ -175,12 +174,122 @@ const HUD_CSS = `
     inset 0 -2px 0 rgba(0, 0, 0, 0.55);
   transition: filter 0.12s ease, transform 0.08s ease, border-color 0.12s ease;
 }
+@media (min-width: 540px) {
+  .pe-top-ledger {
+    padding: 0 10px;
+    gap: 6px;
+  }
+  .pe-res-strip {
+    gap: 5px;
+  }
+  .pe-res-pill {
+    padding: 3.5px 7px;
+    font-size: 12px;
+    gap: 4px;
+  }
+  .pe-res-pill svg {
+    width: 15px;
+    height: 15px;
+  }
+  .pe-icon-btn {
+    width: 30px;
+    height: 30px;
+  }
+}
+@media (min-width: 760px) {
+  .pe-top-ledger {
+    padding: 0 14px;
+  }
+  .pe-res-pill {
+    padding: 4px 9px;
+    font-size: 13px;
+    gap: 5px;
+  }
+  .pe-res-label {
+    display: inline;
+  }
+}
 .pe-icon-btn:hover {
   filter: brightness(1.12);
   border-color: #f5b942;
 }
 .pe-icon-btn:active {
   transform: translateY(1px);
+}
+.pe-speed-btn {
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4.5px;
+  border-radius: 5px;
+  border: 1px solid #7c5d25;
+  background: linear-gradient(180deg, #332a21 0%, #1d1711 100%);
+  color: #f5ecd8;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 236, 190, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55);
+  transition: filter 0.12s ease, transform 0.08s ease, border-color 0.12s ease;
+}
+.pe-speed-btn:hover {
+  filter: brightness(1.12);
+  border-color: #f5b942;
+}
+.pe-speed-btn:active {
+  transform: translateY(1px);
+}
+.pe-speed-btn-fast {
+  border-color: #f5b942;
+  background: linear-gradient(180deg, #4f3b1b 0%, #2f210d 100%);
+  color: #fde68a;
+  box-shadow:
+    inset 0 1px 0 rgba(254, 240, 138, 0.35),
+    0 0 8px rgba(245, 185, 66, 0.25);
+}
+@media (min-width: 760px) {
+  .pe-speed-btn {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+}
+.pe-onboarding-strip {
+  pointer-events: none;
+  margin: 4px 0 0 8px;
+  max-width: calc(100vw - 148px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.pe-step-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2.5px 7px;
+  border-radius: 999px;
+  background: rgba(23, 18, 12, 0.88);
+  border: 1px solid #4d3e2c;
+  color: #cbbba0;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.48);
+}
+.pe-step-pill-active {
+  background: linear-gradient(180deg, rgba(62, 46, 24, 0.94) 0%, rgba(34, 25, 13, 0.94) 100%);
+  border-color: #d49b35;
+  color: #fde68a;
+}
+.pe-step-pill-done {
+  background: rgba(16, 44, 28, 0.9);
+  border-color: rgba(34, 197, 94, 0.65);
+  color: #bbf7d0;
 }
 .pe-squad-strip {
   display: flex;
@@ -393,7 +502,7 @@ export function EmpireHud({
   spec,
   snapshot,
   selectedUnitIds,
-  selectedBuildingId,
+  selectedBuildingId: _selectedBuildingId,
   placementKind,
   whisper,
   muted,
@@ -405,23 +514,52 @@ export function EmpireHud({
   onSelectPlacement,
   onTaunt,
   onExitToWarRoom,
+  gameSpeed = 1,
+  onToggleSpeed,
 }: EmpireHudProps) {
-  const [dockMode, setDockMode] = useState<'train' | 'build'>('train');
+  const [preferredDockMode, setPreferredDockMode] = useState<'train' | 'build'>('train');
   const [tauntOpen, setTauntOpen] = useState(false);
 
-  // Automatically reveal Build row when placement starts (e.g. via keyboard hotkey)
-  useEffect(() => {
-    if (placementKind !== null) {
-      setDockMode('build');
-    }
-  }, [placementKind]);
+  const dockMode: 'train' | 'build' = placementKind !== null ? 'build' : preferredDockMode;
 
-  // Switch to Train row when selecting an owned building while not placing
-  useEffect(() => {
-    if (selectedBuildingId !== null && placementKind === null) {
-      setDockMode('train');
-    }
-  }, [selectedBuildingId, placementKind]);
+  const done1 = snapshot.idleVillagerCount === 0;
+  const done2 =
+    (snapshot.ownedBuildings.barracks ?? 0) +
+      (snapshot.ownedBuildings.archery_range ?? 0) +
+      (snapshot.ownedBuildings.stable ?? 0) +
+      (snapshot.ownedBuildings.monastery ?? 0) >
+    0;
+  const done3 = snapshot.armyCount >= 3;
+  const showOnboarding = !(done1 && done2 && done3);
+  const onboardingSteps: ReadonlyArray<{
+    key: string;
+    label: string;
+    done: boolean;
+    active: boolean;
+    icon: EmpireIconName;
+  }> = [
+    {
+      key: 'villager',
+      label: '1. Task Idle Villager',
+      done: done1,
+      active: !done1,
+      icon: 'villager',
+    },
+    {
+      key: 'camp',
+      label: '2. Build Military Camp',
+      done: done2,
+      active: done1 && !done2,
+      icon: 'barracks',
+    },
+    {
+      key: 'army',
+      label: '3. Muster 3+ Troops',
+      done: done3,
+      active: done1 && done2 && !done3,
+      icon: 'swords',
+    },
+  ];
 
   const onPar = Math.floor(snapshot.timeSec) <= snapshot.parSec;
   const popCapped = snapshot.popCurrent >= snapshot.popCap;
@@ -449,16 +587,7 @@ export function EmpireHud({
       <div>
         <header className="pe-top-ledger pe-hud-tabular">
           {/* Resource Counters */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              minWidth: 0,
-              overflowX: 'auto',
-              scrollbarWidth: 'none',
-            }}
-          >
+          <div className="pe-res-strip">
             <div className="pe-res-pill" title="Wood">
               <EmpireIcon name="wood" size={15} />
               <span>{Math.floor(snapshot.resources.wood)}</span>
@@ -504,6 +633,21 @@ export function EmpireHud({
               <span>{formatMmSs(snapshot.timeSec)}</span>
               <span className="pe-res-label">/ {formatMmSs(snapshot.parSec)}</span>
             </div>
+
+            <button
+              type="button"
+              data-testid="hud-speed-toggle"
+              className={`pe-speed-btn pe-hud-tabular ${
+                gameSpeed === 1.5 ? 'pe-speed-btn-fast' : ''
+              }`}
+              title="Toggle Battle Speed (1× / 1.5×)"
+              aria-label={`Battle Speed ${gameSpeed}x`}
+              aria-pressed={gameSpeed === 1.5}
+              onClick={() => onToggleSpeed?.()}
+            >
+              <EmpireIcon name="bolt" size={12} />
+              <span>{gameSpeed === 1.5 ? '1.5×' : '1×'}</span>
+            </button>
           </div>
 
           {/* Right Controls: Taunt Popover + Mute + Exit */}
@@ -606,79 +750,102 @@ export function EmpireHud({
           </div>
         </header>
 
-        {/* SLIM ROYAL ADVISOR PILL (strictly max-width: calc(100vw - 140px) so top-right minimap stays clear) */}
-        <div
-          style={{
-            pointerEvents: 'auto',
-            margin: '6px 0 0 8px',
-            maxWidth: 'calc(100vw - 140px)',
-            width: 'fit-content',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '7px',
-            padding: '5px 7px 5px 9px',
-            borderRadius: '999px',
-            background: 'rgba(23, 18, 12, 0.9)',
-            border: `1px solid ${whisper ? whisperBorder : '#594733'}`,
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.58)',
-          }}
-        >
-          <span
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+          {/* SLIM ROYAL ADVISOR PILL (strictly max-width: calc(100vw - 140px) so top-right minimap stays clear) */}
+          <div
             style={{
-              fontSize: '11.5px',
-              lineHeight: 1.25,
-              color: '#efe3cc',
-              overflow: 'hidden',
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-            }}
-          >
-            {whisper ? (
-              <>
-                <EmpireIcon
-                  name={whisperIconName}
-                  size={13}
-                  style={{ marginRight: '5px' }}
-                />
-                {stripEmoji(whisper.text)}
-              </>
-            ) : (
-              <>
-                <CivCrest
-                  civ={spec.playerCiv}
-                  size={14}
-                  style={{ marginRight: '5px' }}
-                />
-                {selectedUnitIds.length > 0
-                  ? `${selectedUnitIds.length} unit${selectedUnitIds.length > 1 ? 's' : ''} ready`
-                  : `${playerCiv.name} Command`}
-              </>
-            )}
-          </span>
-
-          <button
-            type="button"
-            onClick={onAskScout}
-            style={{
-              cursor: 'pointer',
-              flexShrink: 0,
+              pointerEvents: 'auto',
+              margin: '6px 0 0 8px',
+              maxWidth: 'calc(100vw - 140px)',
+              width: 'fit-content',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '4px',
-              padding: '3px 8px',
+              gap: '7px',
+              padding: '5px 7px 5px 9px',
               borderRadius: '999px',
-              border: '1px solid #b5862e',
-              background: 'linear-gradient(180deg, #433420 0%, #2a2013 100%)',
-              color: '#fde68a',
-              fontSize: '11px',
-              fontWeight: 800,
-              whiteSpace: 'nowrap',
+              background: 'rgba(23, 18, 12, 0.9)',
+              border: `1px solid ${whisper ? whisperBorder : '#594733'}`,
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.58)',
             }}
           >
-            <EmpireIcon name="scout" size={13} />
-            <span>Scout</span>
-          </button>
+            <span
+              style={{
+                fontSize: '11.5px',
+                lineHeight: 1.25,
+                color: '#efe3cc',
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+              }}
+            >
+              {whisper ? (
+                <>
+                  <EmpireIcon
+                    name={whisperIconName}
+                    size={13}
+                    style={{ marginRight: '5px' }}
+                  />
+                  {stripEmoji(whisper.text)}
+                </>
+              ) : (
+                <>
+                  <CivCrest
+                    civ={spec.playerCiv}
+                    size={14}
+                    style={{ marginRight: '5px' }}
+                  />
+                  {selectedUnitIds.length > 0
+                    ? `${selectedUnitIds.length} unit${selectedUnitIds.length > 1 ? 's' : ''} ready`
+                    : `${playerCiv.name} Command`}
+                </>
+              )}
+            </span>
+
+            <button
+              type="button"
+              onClick={onAskScout}
+              style={{
+                cursor: 'pointer',
+                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '3px 8px',
+                borderRadius: '999px',
+                border: '1px solid #b5862e',
+                background: 'linear-gradient(180deg, #433420 0%, #2a2013 100%)',
+                color: '#fde68a',
+                fontSize: '11px',
+                fontWeight: 800,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <EmpireIcon name="scout" size={13} />
+              <span>Scout</span>
+            </button>
+          </div>
+
+          {/* 3-STEP ROYAL FIELD ORDERS (Contextual Onboarding — auto-hides once all 3 steps complete) */}
+          {showOnboarding && (
+            <div data-testid="hud-onboarding-steps" className="pe-onboarding-strip">
+              {onboardingSteps.map((step) => (
+                <span
+                  key={step.key}
+                  className={`pe-step-pill ${
+                    step.done
+                      ? 'pe-step-pill-done'
+                      : step.active
+                        ? 'pe-step-pill-active'
+                        : ''
+                  }`}
+                >
+                  <EmpireIcon name={step.done ? 'check' : step.icon} size={11} />
+                  <span>{step.label}</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -768,7 +935,7 @@ export function EmpireHud({
                   className={`pe-mode-btn ${dockMode === 'train' ? 'pe-mode-btn-active' : ''}`}
                   onClick={() => {
                     if (placementKind !== null) onSelectPlacement(null);
-                    setDockMode('train');
+                    setPreferredDockMode('train');
                   }}
                 >
                   <EmpireIcon name="swords" size={12} />
@@ -778,7 +945,7 @@ export function EmpireHud({
                   type="button"
                   aria-pressed={dockMode === 'build'}
                   className={`pe-mode-btn ${dockMode === 'build' ? 'pe-mode-btn-active' : ''}`}
-                  onClick={() => setDockMode('build')}
+                  onClick={() => setPreferredDockMode('build')}
                 >
                   <EmpireIcon name="hammer" size={12} />
                   <span>Build</span>
