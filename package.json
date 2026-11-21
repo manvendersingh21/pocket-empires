@@ -7,9 +7,11 @@
   "scripts": {
     "build:client": "vite build --config src/client/vite.config.ts",
     "build:server": "esbuild src/server/index.ts --bundle --platform=node --format=cjs --outfile=dist/server/index.cjs",
-    "build": "npm run build:client && npm run build:server",
-    "test": "node --test \"tests/**/*.test.ts\"",
-    "verify:levels": "node scripts/verify-levels.mjs"
+    "build": "npm run check:invariants && npm run build:client && npm run build:server",
+    "check:invariants": "node scripts/check-invariants.mjs",
+    "test": "npm run check:invariants && node --test \"tests/**/*.test.ts\"",
+    "verify:levels": "node scripts/verify-levels.mjs",
+    "verify:runtime": "node scripts/verify-runtime.mjs"
   },
   "dependencies": {
     "@devvit/analytics": "^0.15.4",

@@ -1,0 +1,107 @@
+{
+  "splash_play_cta": {
+    "route": "/splash.html",
+    "component": "Splash",
+    "file": "src/client/splash.tsx",
+    "selectorRoleOrText": "role=button[name=\"SOUND THE HORN — PLAY DAILY\"s]",
+    "description": "Primary Reddit feed splash call-to-arms button that invokes requestExpandedMode(..., 'game') to launch the Daily Siege."
+  },
+  "war_room_play_daily": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "role=button[name=\"SOUND THE HORN — PLAY DAILY SIEGE\"s]",
+    "description": "Hammered brass War Room primary CTA that starts Today's deterministic 180-degree symmetric Daily Siege."
+  },
+  "war_room_ranks_tab": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "role=button[name=\"War Room Ranks\"s]",
+    "description": "Segmented War Room tab displaying Today's subreddit leaderboard standings, clear times, crowns, and strategies."
+  },
+  "skirmish_forge_tab": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "role=button[name=\"Skirmish Forge\"s]",
+    "description": "Segmented War Room tab opening the Natural-Language Skirmish Forge and PE-... Reddit Challenge Code decoder."
+  },
+  "forge_prompt_input": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "role=textbox[name=\"Custom Siege Prompt or Challenge Code\"s]",
+    "description": "Text input accepting plain-English custom battle prompts or shareable PE-... challenge codes."
+  },
+  "forge_craft_btn": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "role=button[name=\"Forge\"s]",
+    "description": "Submit button that compiles the forge prompt into an A*-walkability-verified SkirmishSpec and PE-... share code."
+  },
+  "hud_resource_ledger": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "header.pe-top-ledger",
+    "description": "Top resource ledger displaying live Wood, Food, Gold, Population (current/cap), 3-Crown Par clock, and match controls."
+  },
+  "hud_scout_advisor_btn": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "role=button[name=\"Scout\"s]",
+    "description": "Royal War-Council Scout button inside the slim top-left advisor pill that requests live counter-unit tactical counsel."
+  },
+  "hud_taunt_btn": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "role=button[name=\"Taunts\"s]",
+    "description": "Top-right brass war-horn icon button toggling the classic Age-of-Empires taunt popover (30 Wololo!, 11, 14, 1)."
+  },
+  "squad_idle_villager": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "role=button[name=/^Idle \\(\\d+\\)$/]",
+    "description": "Quick-select squad pill highlighting and selecting idle Villagers for immediate 1-tap economy tasking."
+  },
+  "squad_all_army": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "role=button[name=/^Army \\(\\d+\\)$/]",
+    "description": "Quick-select squad pill selecting all living player military units across the battlefield."
+  },
+  "squad_siege_keep": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "role=button[name=\"Siege Keep!\"s]",
+    "description": "One-tap crimson assault pill issuing cmdAttackEnemyKeep to march all mustered military units onto the Rival Town Center."
+  },
+  "dock_mode_train": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "role=button[name=\"Train\"s]",
+    "description": "Bottom command dock mode switch revealing the 6-card unit production deck (Villager, Swordsman, Pikeman, Archer, Knight, Monk)."
+  },
+  "dock_mode_build": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "role=button[name=\"Build\"s]",
+    "description": "Bottom command dock mode switch revealing the 6-card structure placement deck (Camp, Barracks, Range, Stable, Monastery, Tower)."
+  },
+  "minimap_canvas": {
+    "route": "/game.html#game",
+    "component": "IsoCanvas",
+    "file": "src/rendering/IsoCanvas.tsx",
+    "selectorRoleOrText": "main canvas >> nth=1",
+    "description": "Interactive top-right isometric diamond minimap canvas showing terrain, fog of war, empires, and camera viewport frustum."
+  }
+}
