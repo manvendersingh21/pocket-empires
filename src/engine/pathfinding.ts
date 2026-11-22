@@ -24,7 +24,7 @@ export function buildBlockedGrid(
     if (!isTileWalkable(tiles[i])) blocked[i] = 1;
   }
   for (const b of buildings) {
-    if (b.hp <= 0 || b.id === ignoreBuildingId) continue;
+    if (b.hp <= 0 || b.id === ignoreBuildingId || b.kind === 'farm') continue;
     for (let dy = 0; dy < b.size; dy++) {
       for (let dx = 0; dx < b.size; dx++) {
         const tx = b.tileX + dx;

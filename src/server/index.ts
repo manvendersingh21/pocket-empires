@@ -1,10 +1,20 @@
 import { telemetryRouter } from '@devvit/analytics/server/reddit';
 import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
+import type {
+  BiomeId,
+  CivId,
+  SavedBuildingPlacement,
+  UnitKind,
+} from '../types/rts.js';
 import {
   EmpireValidationError,
   getDailyWarRoom,
+  getPlayerBase,
   isValidDateKey,
+  listPlayerBases,
   recordMatchCompletion,
+  recordRaidResult,
+  savePlayerBase,
   submitWarChronicleComment,
   todayUtcDateKey,
 } from './empire.js';
@@ -177,6 +187,122 @@ const server = createServer(async (req: any, res: any) => {
     } catch (err) {
       console.error('[pocket-empires:server] POST /api/empire/comment failed', err);
       sendJson(res, 500, { posted: false, message: 'Failed to submit War Chronicle comment' });
+    }
+    return;
+  }
+
+  // GET /api/empire/bases
+  if (req.method === 'GET' && req.url?.startsWith('/api/empire/bases')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const excludeOwner = url.searchParams.get('excludeOwner')?.trim() || undefined;
+      const username =
+        context.username && context.username !== 'anonymous'
+          ? context.username
+          : 'Commander';
+      const [bases, myBase] = await Promise.all([
+        listPlayerBases(redis, excludeOwner),
+        getPlayerBase(redis, username),
+      ]);
+      sendJson(res, 200, { bases, myBase });
+    } catch (err) {
+      console.error('[pocket-empires:server] GET /api/empire/bases failed', err);
+      sendJson(res, 500, { error: 'Failed to load player bases' });
+    }
+    return;
+  }
+
+  // POST /api/empire/bases
+  if (req.method === 'POST' && req.url?.startsWith('/api/empire/bases')) {
+    const body = await readJsonBody(req);
+    if (!body.ok) {
+      sendJson(res, 400, { saved: false, base: null, bases: [], error: 'Invalid JSON body' });
+      return;
+    }
+    try {
+      const raw = body.value;
+      const p =
+        raw.base && typeof raw.base === 'object' && !Array.isArray(raw.base)
+          ? (raw.base as Record<string, unknown>)
+          : raw;
+      const owner =
+        context.username && context.username !== 'anonymous'
+          ? context.username
+          : 'Commander';
+      const base = await savePlayerBase(redis, {
+        owner,
+        empireName: typeof p.empireName === 'string' ? p.empireName : undefined,
+        civ: p.civ as CivId,
+        biome: p.biome as BiomeId,
+        buildings: Array.isArray(p.buildings)
+          ? (p.buildings as SavedBuildingPlacement[])
+          : [],
+        garrison: Array.isArray(p.garrison) ? (p.garrison as UnitKind[]) : [],
+      });
+      const bases = await listPlayerBases(redis);
+      if (!base) {
+        sendJson(res, 400, {
+          saved: false,
+          base: null,
+          bases,
+          error: 'Invalid base blueprint: must include a valid civ, biome, and Town Center',
+        });
+        return;
+      }
+      sendJson(res, 200, { saved: true, base, bases });
+    } catch (err) {
+      console.error('[pocket-empires:server] POST /api/empire/bases failed', err);
+      sendJson(res, 500, { saved: false, base: null, bases: [], error: 'Failed to save player base' });
+    }
+    return;
+  }
+
+  // POST /api/empire/raid
+  if (req.method === 'POST' && req.url?.startsWith('/api/empire/raid')) {
+    const body = await readJsonBody(req);
+    if (!body.ok) {
+      sendJson(res, 400, { recorded: false, error: 'Invalid JSON body' });
+      return;
+    }
+    try {
+      const p = body.value;
+      const attacker =
+        context.username && context.username !== 'anonymous'
+          ? context.username
+          : 'Commander';
+      const defender =
+        typeof p.defender === 'string'
+          ? p.defender
+          : typeof p.defenderOwner === 'string'
+            ? p.defenderOwner
+            : typeof p.targetOwner === 'string'
+              ? p.targetOwner
+              : typeof p.owner === 'string'
+                ? p.owner
+                : '';
+      if (!defender.trim()) {
+        sendJson(res, 400, { recorded: false, error: 'Missing defender username' });
+        return;
+      }
+      const result = await recordRaidResult(redis, {
+        attacker,
+        defender,
+        victory: Boolean(p.victory),
+      });
+      const [bases, myBase] = await Promise.all([
+        listPlayerBases(redis),
+        getPlayerBase(redis, attacker),
+      ]);
+      sendJson(res, 200, {
+        recorded: true,
+        trophiesDelta: result.trophiesDelta,
+        defenderBase: result.defenderBase,
+        bases,
+        myBase,
+      });
+    } catch (err) {
+      console.error('[pocket-empires:server] POST /api/empire/raid failed', err);
+      sendJson(res, 500, { recorded: false, error: 'Failed to record raid result' });
     }
     return;
   }

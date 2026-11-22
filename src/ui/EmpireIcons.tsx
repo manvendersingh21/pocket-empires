@@ -49,7 +49,16 @@ export type EmpireIconName =
   | 'copy'
   | 'key'
   | 'target'
-  | 'close';
+  | 'close'
+  | 'fish'
+  | 'horse'
+  | 'farm'
+  | 'wall'
+  | 'stone_wall'
+  | 'settings'
+  | 'raid'
+  | 'home_base'
+  | 'publish';
 
 export interface EmpireIconProps {
   name: EmpireIconName;
@@ -1353,6 +1362,324 @@ function renderIconArtwork(name: EmpireIconName): React.ReactNode {
           strokeWidth="2.4"
           strokeLinecap="round"
         />
+      );
+
+    case 'fish':
+      // Curved Silver-Blue Leaping Trout + Water Droplets & Ripple
+      return (
+        <>
+          <path
+            d="M3.4 19.6Q8 17.8 12.4 19.5T20.6 19.2"
+            fill="none"
+            stroke="#38bdf8"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+          />
+          <polygon
+            points="10.2,6.5 12.5,3.4 14.5,6.3"
+            fill="#0284c7"
+            stroke={INK}
+            strokeWidth="1.15"
+            strokeLinejoin="round"
+          />
+          <polygon
+            points="5.8,15.2 2.2,13.4 3.7,16.4 2.4,19.2 6.6,17"
+            fill="#38bdf8"
+            stroke={INK}
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M5.5 15.8C6.9 9 12.2 5 18.8 9.6C16.2 13.8 11.4 14.2 6.3 16.9Z"
+            fill="#e2e8f0"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M6.2 14.3C7.9 9.3 12.5 6 18.2 9.6C14.8 10.7 10.4 11.5 6.2 14.3Z"
+            fill="#38bdf8"
+          />
+          <path
+            d="M8.6 12.5Q12.8 9.9 16.3 10.5"
+            fill="none"
+            stroke="#fda4af"
+            strokeWidth="1.15"
+            strokeLinecap="round"
+          />
+          <circle cx="15.5" cy="9.6" r="1.05" fill={INK} />
+          <path
+            d="M20.2 3.2C21.5 5 21.8 6.2 20.2 6.9C18.6 6.2 18.9 5 20.2 3.2Z"
+            fill="#7dd3fc"
+            stroke={INK}
+            strokeWidth="1.05"
+            strokeLinejoin="round"
+          />
+          <circle cx="17.5" cy="4.3" r="1" fill="#bae6fd" />
+        </>
+      );
+
+    case 'horse':
+      // Classic AoE / Chess Steed Profile Head & Flowing Mane
+      return (
+        <>
+          <path
+            d="M9.4 4.4C5.6 5.8 3.8 10 4.4 15.8L8.2 14.8Z"
+            fill="#451a03"
+            stroke={INK}
+            strokeWidth="1.25"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M5.8 20.8L7 13.2C7.4 8.8 9.6 5.6 12.8 4.6L14 2.2L15.6 4.8L20.4 8.8C21 9.6 20.6 11.2 19.4 11.8L15.6 11.6L14 14.8L16.6 20.8Z"
+            fill="#b4692e"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M7.7 19.8L8.6 13C9 9.4 10.8 6.6 13.3 5.6L18.8 9.4L18 10.6L14.6 10.4L12.6 14.6L14.7 19.8Z"
+            fill="#d97706"
+          />
+          <line
+            x1="13.2"
+            y1="5.8"
+            x2="18.3"
+            y2="10.8"
+            stroke="#f5b942"
+            strokeWidth="1.45"
+            strokeLinecap="round"
+          />
+          <circle cx="14.5" cy="7.6" r="1.05" fill={INK} />
+          <circle cx="18.8" cy="10" r="0.7" fill={INK} />
+        </>
+      );
+
+    case 'farm':
+      // Golden Age-of-Empires Wheat Sheaf & Tilled Furrow
+      return (
+        <>
+          <path
+            d="M3.4 20.2Q12 18.4 20.6 20.2"
+            fill="none"
+            stroke="#92400e"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+          />
+          <path
+            d="M10.4 19.2Q8.6 13.5 5.6 6.8M12 19.4V4.2M13.6 19.2Q15.4 13.5 18.4 6.8"
+            fill="none"
+            stroke="#d97706"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+          />
+          <ellipse
+            cx="6.8"
+            cy="8.6"
+            rx="2.1"
+            ry="4.3"
+            transform="rotate(-26 6.8 8.6)"
+            fill="#facc15"
+            stroke={INK}
+            strokeWidth="1.15"
+          />
+          <ellipse
+            cx="17.2"
+            cy="8.6"
+            rx="2.1"
+            ry="4.3"
+            transform="rotate(26 17.2 8.6)"
+            fill="#facc15"
+            stroke={INK}
+            strokeWidth="1.15"
+          />
+          <ellipse
+            cx="12"
+            cy="7.6"
+            rx="2.3"
+            ry="4.8"
+            fill="#fde047"
+            stroke={INK}
+            strokeWidth="1.2"
+          />
+          <line x1="12" y1="9.2" x2="12" y2="4.4" stroke="#b45309" strokeWidth="1" />
+          <rect
+            x="8.6"
+            y="14.2"
+            width="6.8"
+            height="2.4"
+            rx="1"
+            fill="#dc2626"
+            stroke={INK}
+            strokeWidth="1.15"
+          />
+        </>
+      );
+
+    case 'wall':
+    case 'stone_wall':
+      // Crenelated Ashlar Stone Fortification Wall Segment
+      return (
+        <>
+          <path
+            d="M2.6 20.2V6.2H7.2V9.2H9.6V6.2H14.4V9.2H16.8V6.2H21.4V20.2Z"
+            fill="#cbd5e1"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M3.4 7H6.4V9.9H10.4V7H13.6V9.9H17.6V7H20.6V13.2H3.4Z"
+            fill="#e2e8f0"
+          />
+          <rect x="3.4" y="16.8" width="17.2" height="2.7" fill="#94a3b8" />
+          <line x1="2.8" y1="13.2" x2="21.2" y2="13.2" stroke={INK} strokeWidth="1.2" />
+          <line x1="2.8" y1="16.8" x2="21.2" y2="16.8" stroke={INK} strokeWidth="1.2" />
+          <line x1="12" y1="9.2" x2="12" y2="13.2" stroke={INK} strokeWidth="1.2" />
+          <line x1="8.2" y1="13.2" x2="8.2" y2="16.8" stroke={INK} strokeWidth="1.2" />
+          <line x1="15.8" y1="13.2" x2="15.8" y2="16.8" stroke={INK} strokeWidth="1.2" />
+          <line x1="12" y1="16.8" x2="12" y2="20.2" stroke={INK} strokeWidth="1.2" />
+          <rect x="10.6" y="10.2" width="2.8" height="2.2" rx="0.4" fill="#2563eb" />
+        </>
+      );
+
+    case 'settings':
+      // Sleek Forged Steel & Brass Gear Cog
+      return (
+        <>
+          <path
+            d="M19.32 10.36L21.7 10.63L21.7 13.37L19.32 13.64L18.33 16.02L19.83 17.89L17.89 19.83L16.02 18.33L13.64 19.32L13.37 21.7L10.63 21.7L10.36 19.32L7.98 18.33L6.11 19.83L4.17 17.89L5.67 16.02L4.68 13.64L2.3 13.37L2.3 10.63L4.68 10.36L5.67 7.98L4.17 6.11L6.11 4.17L7.98 5.67L10.36 4.68L10.63 2.3L13.37 2.3L13.64 4.68L16.02 5.67L17.89 4.17L19.83 6.11L18.33 7.98Z"
+            fill="#cbd5e1"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="12" r="4.6" fill="#f5b942" stroke={INK} strokeWidth="1.2" />
+          <circle cx="12" cy="12" r="2.1" fill={INK} />
+        </>
+      );
+
+    case 'raid':
+      // Crossed Bearded Battle Axes & Crimson Clash Shield
+      return (
+        <>
+          <line
+            x1="4.2"
+            y1="20.4"
+            x2="18.8"
+            y2="4.8"
+            stroke="#92400e"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+          />
+          <line
+            x1="19.8"
+            y1="20.4"
+            x2="5.2"
+            y2="4.8"
+            stroke="#92400e"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+          />
+          <path
+            d="M15.4 4.2C18.8 2.8 21.4 4.8 21.2 8.8C18.8 8.6 17.2 9.6 16.4 11.4L14 6.6Z"
+            fill="#e2e8f0"
+            stroke={INK}
+            strokeWidth="1.25"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M8.6 4.2C5.2 2.8 2.6 4.8 2.8 8.8C5.2 8.6 6.8 9.6 7.6 11.4L10 6.6Z"
+            fill="#f1f5f9"
+            stroke={INK}
+            strokeWidth="1.25"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M12 8.6L16.8 10.6V14.5C16.8 17.5 14.6 19.6 12 20.6C9.4 19.6 7.2 17.5 7.2 14.5V10.6Z"
+            fill="#dc2626"
+            stroke="#f5b942"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="14.2" r="1.6" fill="#fde047" stroke={INK} strokeWidth="0.85" />
+        </>
+      );
+
+    case 'home_base':
+      // Royal Homestead Keep Cottage with Fluttering Banner
+      return (
+        <>
+          <line
+            x1="12"
+            y1="1.6"
+            x2="12"
+            y2="5.6"
+            stroke="#f5b942"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+          />
+          <polygon
+            points="12,1.8 18.4,3.3 12,4.8"
+            fill="#f5b942"
+            stroke={INK}
+            strokeWidth="0.95"
+            strokeLinejoin="round"
+          />
+          <rect
+            x="4.4"
+            y="11.2"
+            width="15.2"
+            height="9.4"
+            rx="0.9"
+            fill="#e2e8f0"
+            stroke={INK}
+            strokeWidth="1.35"
+          />
+          <polygon
+            points="12,5 2.6,11.8 21.4,11.8"
+            fill="#2563eb"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <polygon points="12,5.9 4.4,11.2 12,11.2" fill="#60a5fa" opacity="0.75" />
+          <path
+            d="M9.8 20.6V15.4C9.8 14.1 10.8 13.3 12 13.3C13.2 13.3 14.2 14.1 14.2 15.4V20.6Z"
+            fill="#fbbf24"
+            stroke={INK}
+            strokeWidth="1.15"
+          />
+        </>
+      );
+
+    case 'publish':
+      // Cloud Banner Crest + Gleaming Golden Upload Arrow
+      return (
+        <>
+          <path
+            d="M6.4 19.6H17.6C19.8 19.6 21.2 18.2 21.2 16.2C21.2 14.4 19.9 13 18.2 12.8C17.6 9.8 15.1 7.8 12 7.8C8.9 7.8 6.4 9.8 5.8 12.8C4.1 13 2.8 14.4 2.8 16.2C2.8 18.2 4.2 19.6 6.4 19.6Z"
+            fill="#cbd5e1"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M6.2 18.4H17.6C19.1 18.4 20.1 17.5 20.1 16.2C20.1 15 19.2 14 17.8 13.8"
+            fill="none"
+            stroke="#f8fafc"
+            strokeWidth="1.15"
+            strokeLinecap="round"
+          />
+          <polygon
+            points="12,2.4 17.4,8.2 14.1,8.2 14.1,15.8 9.9,15.8 9.9,8.2 6.6,8.2"
+            fill="#f5b942"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <polygon points="12,3.7 15.6,7.6 13.3,7.6 13.3,15 12,15" fill="#fef08a" opacity="0.7" />
+        </>
       );
   }
 }

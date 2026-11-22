@@ -5,11 +5,14 @@ import {
   UNITS,
   type Building,
   type BuildingKind,
+  type CivId,
   type FogState,
   type GameState,
+  type PlayerBaseBlueprint,
   type Projectile,
   type ResourceKind,
   type Resources,
+  type SavedBuildingPlacement,
   type SkirmishSpec,
   type SoundEventKind,
   type TauntId,
@@ -17,17 +20,51 @@ import {
   type TileKind,
   type Unit,
   type UnitKind,
+  type WildHorse,
 } from '../types/rts.js';
-import { buildMapTiles, ENEMY_TC_POS, PLAYER_TC_POS } from './dailyGenerator.js';
-import { buildBlockedGrid, findPath, inBounds } from './pathfinding.js';
+import {
+  buildMapTiles,
+  ENEMY_TC_POS,
+  generateDailySpec,
+  PLAYER_TC_POS,
+} from './dailyGenerator.js';
+import {
+  buildBlockedGrid,
+  findPath,
+  inBounds,
+  isTileWalkable,
+  nearestWalkableTile,
+} from './pathfinding.js';
+import { hashString } from './rng.js';
 
 export const POP_HARD_CAP = 22;
 
-function tileToResource(kind: TileKind): ResourceKind | null {
+const WILD_HORSE_MEADOWS: ReadonlyArray<{
+  x: number;
+  y: number;
+  coat: WildHorse['coat'];
+  facing: number;
+}> = [
+  { x: 5.5, y: 11.5, coat: 'chestnut', facing: 1 },
+  { x: 10.5, y: 4.5, coat: 'bay', facing: -1 },
+  { x: 12.5, y: 9.5, coat: 'dapple', facing: 1 },
+  { x: 3.5, y: 6.5, coat: 'chestnut', facing: -1 },
+];
+
+export function tileToResource(kind: TileKind): ResourceKind | null {
   if (kind === 'forest') return 'wood';
-  if (kind === 'berry') return 'food';
+  if (kind === 'berry' || kind === 'fish') return 'food';
   if (kind === 'gold') return 'gold';
   return null;
+}
+
+export function countTamedHorses(state: GameState, team: Team): number {
+  if (!state.horses) return 0;
+  let count = 0;
+  for (const h of state.horses) {
+    if (h.team === team) count++;
+  }
+  return count;
 }
 
 export function getCivForTeam(state: GameState, team: Team) {
@@ -69,7 +106,12 @@ export function getEffectiveUnitCost(
   return { wood, food, gold };
 }
 
-export function getEffectiveUnitStats(spec: SkirmishSpec, team: Team, kind: UnitKind) {
+export function getEffectiveUnitStats(
+  spec: SkirmishSpec,
+  team: Team,
+  kind: UnitKind,
+  tamedHorses = 0,
+) {
   const base = UNITS[kind];
   const civ = team === 'player' ? spec.playerCiv : spec.enemyCiv;
   let maxHp = base.maxHp;
@@ -100,6 +142,10 @@ export function getEffectiveUnitStats(spec: SkirmishSpec, team: Team, kind: Unit
   if (civ === 'mongols' && (kind === 'scout' || kind === 'knight')) {
     speed *= 1.24;
     if (kind === 'scout') vision += 2.0;
+  }
+
+  if (tamedHorses > 0 && (kind === 'scout' || kind === 'knight')) {
+    speed *= 1 + Math.min(0.15, tamedHorses * 0.05);
   }
 
   if (spec.modifier === 'iron_vanguard' && (kind === 'militia' || kind === 'pikeman')) {
@@ -215,6 +261,8 @@ function spawnBuilding(
   built: boolean,
 ): Building {
   const spec = BUILDINGS[kind];
+  const rawRallyX = tileX + spec.size / 2;
+  const rawRallyY = team === 'player' ? tileY - 0.8 : tileY + spec.size + 0.8;
   const building: Building = {
     id: state.nextId++,
     team,
@@ -227,15 +275,46 @@ function spawnBuilding(
     built,
     buildProgress: built ? 1 : 0.08,
     queue: [],
-    rallyX: tileX + spec.size / 2,
-    rallyY: team === 'player' ? tileY - 0.8 : tileY + spec.size + 0.8,
-    attackTimer: 0,
+    rallyX: Math.max(0.5, Math.min(state.mapSize - 0.5, rawRallyX)),
+    rallyY: Math.max(0.5, Math.min(state.mapSize - 0.5, rawRallyY)),
+    attackTimer: kind === 'farm' ? 2.5 : 0,
   };
   state.buildings.push(building);
   return building;
 }
 
+function spawnSymmetricWildHorses(state: GameState) {
+  const blocked = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
+  state.horses = [];
+  for (const m of WILD_HORSE_MEADOWS) {
+    const mx = Math.floor(m.x);
+    const my = Math.floor(m.y);
+    const spot =
+      inBounds(mx, my, state.mapSize) && blocked[my * state.mapSize + mx] === 0
+        ? { x: mx, y: my }
+        : nearestWalkableTile(blocked, state.mapSize, mx, my, m.x, m.y, 1);
+    const hx = spot ? spot.x + 0.5 : m.x;
+    const hy = spot ? spot.y + 0.5 : m.y;
+    state.horses.push({
+      id: state.nextId++,
+      x: hx,
+      y: hy,
+      team: 'neutral',
+      coat: m.coat,
+      facing: m.facing,
+      animPhase: (state.nextId * 0.53) % (Math.PI * 2),
+      wanderTimer: 1.5 + (state.nextId % 3) * 0.8,
+      targetX: hx,
+      targetY: hy,
+    });
+  }
+}
+
 export function recomputeFog(state: GameState) {
+  if (state.mode === 'base_builder') {
+    state.fog.fill(2);
+    return;
+  }
   for (let i = 0; i < state.fog.length; i++) {
     if (state.fog[i] === 2) state.fog[i] = 1;
   }
@@ -261,11 +340,38 @@ export function recomputeFog(state: GameState) {
     const v = BUILDINGS[b.kind].vision;
     revealCircle(b.tileX + b.size / 2, b.tileY + b.size / 2, b.built ? v : 3.2);
   }
+  const playerHorses = countTamedHorses(state, 'player');
   for (const u of state.units) {
     if (u.team !== 'player' || u.hp <= 0) continue;
-    const st = getEffectiveUnitStats(state.spec, 'player', u.kind);
+    const st = getEffectiveUnitStats(state.spec, 'player', u.kind, playerHorses);
     revealCircle(u.x, u.y, st.vision);
   }
+  if (state.horses) {
+    for (const h of state.horses) {
+      if (h.team === 'player') {
+        revealCircle(h.x, h.y, 2.8);
+      }
+    }
+  }
+}
+
+function createBlankMatchStats(): GameState['stats'] {
+  return {
+    villagersTrained: 0,
+    militaryTrained: 0,
+    unitsLost: 0,
+    enemyUnitsSlain: 0,
+    buildingsBuilt: 0,
+    enemyBuildingsRazed: 0,
+    wololoConversions: 0,
+    woodGathered: 0,
+    foodGathered: 0,
+    goldGathered: 0,
+    tauntsUsed: 0,
+    cheekyWololo: false,
+    horsesTamed: 0,
+    countsByUnit: {},
+  };
 }
 
 export function createInitialState(spec: SkirmishSpec): GameState {
@@ -275,6 +381,7 @@ export function createInitialState(spec: SkirmishSpec): GameState {
 
   const state: GameState = {
     spec,
+    mode: 'skirmish',
     mapSize: MAP_SIZE,
     tiles,
     fog,
@@ -288,24 +395,11 @@ export function createInitialState(spec: SkirmishSpec): GameState {
     },
     buildings: [],
     units: [],
+    horses: [],
     projectiles: [],
     callouts: [],
     soundEvents: [],
-    stats: {
-      villagersTrained: 0,
-      militaryTrained: 0,
-      unitsLost: 0,
-      enemyUnitsSlain: 0,
-      buildingsBuilt: 0,
-      enemyBuildingsRazed: 0,
-      wololoConversions: 0,
-      woodGathered: 0,
-      foodGathered: 0,
-      goldGathered: 0,
-      tauntsUsed: 0,
-      cheekyWololo: false,
-      countsByUnit: {},
-    },
+    stats: createBlankMatchStats(),
     enemyWaveTimer: 55,
     enemyBuildStage: 0,
     lastUnderAttackHornSec: -30,
@@ -334,6 +428,388 @@ export function createInitialState(spec: SkirmishSpec): GameState {
   ev3.order = { type: 'gather', tileX: 8, tileY: 4, resource: 'gold' };
   spawnUnit(state, 'enemy', 'scout', 6.5, 5.2);
 
+  // Spawn 4 symmetric wild horses grazing in the meadows
+  spawnSymmetricWildHorses(state);
+
+  recomputeFog(state);
+  return state;
+}
+
+function canFitBlueprintFootprint(
+  state: GameState,
+  tileX: number,
+  tileY: number,
+  size: number,
+  allowClearResource: boolean,
+): boolean {
+  if (!inBounds(tileX, tileY, state.mapSize)) return false;
+  if (!inBounds(tileX + size - 1, tileY + size - 1, state.mapSize)) return false;
+  for (let dy = 0; dy < size; dy++) {
+    for (let dx = 0; dx < size; dx++) {
+      const tx = tileX + dx;
+      const ty = tileY + dy;
+      const tile = state.tiles[ty * state.mapSize + tx];
+      if (!tile) return false;
+      const isClearGround = tile.kind === 'grass' || tile.kind === 'road';
+      const isClearableResource =
+        allowClearResource &&
+        (tile.kind === 'forest' || tile.kind === 'berry' || tile.kind === 'gold');
+      if (!isClearGround && !isClearableResource) return false;
+      for (const b of state.buildings) {
+        if (b.hp <= 0) continue;
+        if (tx >= b.tileX && tx < b.tileX + b.size && ty >= b.tileY && ty < b.tileY + b.size) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+function placeBlueprintBuilding(
+  state: GameState,
+  team: Team,
+  kind: BuildingKind,
+  rawX: number,
+  rawY: number,
+): Building | null {
+  const size = BUILDINGS[kind].size;
+  const baseX = Math.max(0, Math.min(state.mapSize - size, Math.round(rawX)));
+  const baseY = Math.max(0, Math.min(state.mapSize - size, Math.round(rawY)));
+
+  let chosen: { x: number; y: number } | null = null;
+  if (canFitBlueprintFootprint(state, baseX, baseY, size, false)) {
+    chosen = { x: baseX, y: baseY };
+  } else if (canFitBlueprintFootprint(state, baseX, baseY, size, true)) {
+    chosen = { x: baseX, y: baseY };
+  } else {
+    outer: for (let radius = 1; radius <= 3; radius++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const cx = baseX + dx;
+          const cy = baseY + dy;
+          if (!inBounds(cx, cy, state.mapSize) || !inBounds(cx + size - 1, cy + size - 1, state.mapSize)) {
+            continue;
+          }
+          if (team === 'enemy' && cx + cy > 15) continue;
+          if (team === 'player' && cx + cy < 15) continue;
+          if (canFitBlueprintFootprint(state, cx, cy, size, true)) {
+            chosen = { x: cx, y: cy };
+            break outer;
+          }
+        }
+      }
+    }
+  }
+
+  if (!chosen) return null;
+  for (let dy = 0; dy < size; dy++) {
+    for (let dx = 0; dx < size; dx++) {
+      const t = state.tiles[(chosen.y + dy) * state.mapSize + (chosen.x + dx)];
+      if (t && t.kind !== 'road') {
+        t.kind = 'grass';
+        t.amount = 0;
+        t.maxAmount = 0;
+      }
+    }
+  }
+  return spawnBuilding(state, team, kind, chosen.x, chosen.y, true);
+}
+
+function spawnUnitsAroundKeep(
+  state: GameState,
+  team: Team,
+  unitKinds: readonly UnitKind[],
+  keep: Building,
+) {
+  const blocked = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
+  const frontY = team === 'player' ? keep.tileY - 1 : keep.tileY + keep.size;
+  const centerX = keep.tileX + keep.size / 2;
+
+  unitKinds.forEach((kind, idx) => {
+    const aliveCount = state.units.filter((u) => u.team === team && u.hp > 0).length;
+    if (aliveCount >= POP_HARD_CAP) return;
+    const angle = (idx * 2.39996) % (Math.PI * 2);
+    const ring = 0.8 + Math.floor(idx / 5) * 0.9;
+    const goalX = Math.max(0, Math.min(state.mapSize - 1, Math.round(centerX + Math.cos(angle) * ring)));
+    const goalY = Math.max(0, Math.min(state.mapSize - 1, Math.round(frontY + Math.sin(angle) * ring)));
+    const tileSpot = nearestWalkableTile(
+      blocked,
+      state.mapSize,
+      goalX,
+      goalY,
+      centerX,
+      frontY + 0.5,
+      1,
+    );
+    const sx = tileSpot
+      ? tileSpot.x + 0.32 + ((idx * 0.17) % 0.36)
+      : Math.max(0.5, Math.min(state.mapSize - 0.5, centerX));
+    const sy = tileSpot
+      ? tileSpot.y + 0.32 + (((idx + 2) * 0.19) % 0.36)
+      : Math.max(0.5, Math.min(state.mapSize - 0.5, frontY + 0.5));
+    spawnUnit(state, team, kind, sx, sy);
+  });
+}
+
+/**
+ * Creates a peaceful Clash-of-Clans / AoE Homestead sandbox (`mode = 'base_builder'`)
+ * with full map visibility, generous starting resources, and zero enemy AI.
+ */
+export function createBaseBuilderState(
+  saved?: PlayerBaseBlueprint | null,
+  ownerName?: string,
+): GameState {
+  const daily = generateDailySpec();
+  const owner = saved?.owner?.trim() || ownerName?.trim() || 'Commander';
+  const civ = saved?.civ ?? daily.playerCiv;
+  const biome = saved?.biome ?? 'sherwood';
+  const enemyCiv: CivId = civ === 'vikings' ? 'britons' : 'vikings';
+
+  const spec: SkirmishSpec = {
+    ...daily,
+    seed: hashString(`homestead:v1:${biome}`),
+    mapName: saved?.empireName?.trim() || `${owner}'s Homestead`,
+    biome,
+    playerCiv: civ,
+    enemyCiv,
+    modifier: 'standard',
+    chokepointStyle: 'twin_fords',
+    parSec: 150,
+    isCustom: true,
+    customPrompt: `Homestead Builder (${owner})`,
+  };
+
+  const tiles = buildMapTiles(spec);
+  const fog = new Array<FogState>(MAP_SIZE * MAP_SIZE).fill(2);
+
+  const state: GameState = {
+    spec,
+    mode: 'base_builder',
+    mapSize: MAP_SIZE,
+    tiles,
+    fog,
+    timeSec: 0,
+    tick: 0,
+    outcome: 'playing',
+    nextId: 1,
+    resources: {
+      player: { wood: 650, food: 500, gold: 400 },
+      enemy: { wood: 0, food: 0, gold: 0 },
+    },
+    buildings: [],
+    units: [],
+    horses: [],
+    projectiles: [],
+    callouts: [],
+    soundEvents: [],
+    stats: createBlankMatchStats(),
+    enemyWaveTimer: 999999,
+    enemyBuildStage: 0,
+    lastUnderAttackHornSec: -30,
+    recentTauntSec: -30,
+    ghostBreach: null,
+  };
+
+  if (saved && saved.buildings.length > 0) {
+    // Place Town Center first if present so fortifications align around it
+    const ordered = [...saved.buildings].sort((a, b) =>
+      a.kind === 'town_center' ? -1 : b.kind === 'town_center' ? 1 : 0,
+    );
+    for (const item of ordered) {
+      const size = BUILDINGS[item.kind].size;
+      let tx = item.tileX;
+      let ty = item.tileY;
+      // If blueprint coordinates were normalized to the northern raid half, reflect back to player half
+      if (tx + ty + (size - 1) <= 14) {
+        tx = MAP_SIZE - 1 - tx - (size - 1);
+        ty = MAP_SIZE - 1 - ty - (size - 1);
+      }
+      placeBlueprintBuilding(state, 'player', item.kind, tx, ty);
+    }
+  }
+
+  let playerTc = state.buildings.find((b) => b.team === 'player' && b.kind === 'town_center');
+  if (!playerTc) {
+    playerTc =
+      placeBlueprintBuilding(state, 'player', 'town_center', PLAYER_TC_POS.x, PLAYER_TC_POS.y) ??
+      spawnBuilding(state, 'player', 'town_center', PLAYER_TC_POS.x, PLAYER_TC_POS.y, true);
+  }
+
+  // Spawn 3 homestead villagers ready to gather, farm, fish, and construct walls
+  spawnUnitsAroundKeep(state, 'player', ['villager', 'villager', 'villager'], playerTc);
+  const vills = state.units.filter((u) => u.team === 'player' && u.kind === 'villager');
+  if (vills[0]) vills[0].order = { type: 'gather', tileX: 6, tileY: 13, resource: 'wood' };
+  if (vills[1]) vills[1].order = { type: 'gather', tileX: 12, tileY: 11, resource: 'food' };
+
+  const garrisonToSpawn: UnitKind[] =
+    saved && saved.garrison.length > 0 ? saved.garrison.slice(0, 12) : ['scout'];
+  spawnUnitsAroundKeep(state, 'player', garrisonToSpawn, playerTc);
+
+  spawnSymmetricWildHorses(state);
+  recomputeFog(state);
+  return state;
+}
+
+/**
+ * Serializes all living `'player'` buildings and up to 12 military garrison units
+ * into a shareable `PlayerBaseBlueprint` (normalized to northern raid orientation when raided).
+ */
+export function exportBaseBlueprint(
+  state: GameState,
+  owner: string,
+  empireName?: string,
+): PlayerBaseBlueprint {
+  const cleanOwner = owner.trim() || 'Commander';
+  const cleanName =
+    empireName?.trim() || state.spec.mapName?.trim() || `${cleanOwner}'s Keep`;
+
+  const livingPlayerBuildings = state.buildings.filter(
+    (b) => b.team === 'player' && b.hp > 0,
+  );
+  const buildings: SavedBuildingPlacement[] = livingPlayerBuildings.map((b) => ({
+    kind: b.kind,
+    tileX: b.tileX,
+    tileY: b.tileY,
+  }));
+  if (!buildings.some((b) => b.kind === 'town_center')) {
+    buildings.unshift({
+      kind: 'town_center',
+      tileX: PLAYER_TC_POS.x,
+      tileY: PLAYER_TC_POS.y,
+    });
+  }
+
+  const garrison: UnitKind[] = state.units
+    .filter((u) => u.team === 'player' && u.hp > 0 && u.kind !== 'villager')
+    .slice(0, 12)
+    .map((u) => u.kind);
+
+  return {
+    owner: cleanOwner,
+    empireName: cleanName,
+    civ: state.spec.playerCiv,
+    biome: state.spec.biome,
+    buildings,
+    garrison,
+    defenseWins: 0,
+    raidsPlayed: 0,
+    trophies: 1000,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Creates a Clash-of-Clans style Player Base Raid (`mode = 'raid'`) against `target`:
+ * - Reflects player-half fortress coordinates `(tx, ty)` via 180-deg rotation onto the northern Defender bank.
+ * - Spawns `target.garrison` as Red defenders guarding their fortified Keep.
+ * - Grants the raiding player a Raider Warchest (`220W, 220F, 160G`) + raiding vanguard!
+ */
+export function createPlayerRaidState(
+  target: PlayerBaseBlueprint,
+  playerCiv?: CivId,
+): GameState {
+  const daily = generateDailySpec();
+  const resolvedPlayerCiv: CivId =
+    playerCiv ??
+    (daily.playerCiv === target.civ
+      ? target.civ === 'britons'
+        ? 'franks'
+        : 'britons'
+      : daily.playerCiv);
+
+  const spec: SkirmishSpec = {
+    ...daily,
+    seed: hashString(`homestead:v1:${target.biome}`),
+    mapName: target.empireName || `${target.owner}'s Fortress`,
+    biome: target.biome,
+    playerCiv: resolvedPlayerCiv,
+    enemyCiv: target.civ,
+    aiLeaderName: target.owner || 'Defender',
+    modifier: 'standard',
+    chokepointStyle: 'twin_fords',
+    parSec: 135,
+    isCustom: true,
+    customPrompt: `Raid vs ${target.owner}`,
+  };
+
+  const tiles = buildMapTiles(spec);
+  const fog = new Array<FogState>(MAP_SIZE * MAP_SIZE).fill(0);
+
+  const state: GameState = {
+    spec,
+    mode: 'raid',
+    raidTargetOwner: target.owner,
+    mapSize: MAP_SIZE,
+    tiles,
+    fog,
+    timeSec: 0,
+    tick: 0,
+    outcome: 'playing',
+    nextId: 1,
+    resources: {
+      player: { wood: 220, food: 220, gold: 160 },
+      enemy: { wood: 140, food: 140, gold: 90 },
+    },
+    buildings: [],
+    units: [],
+    horses: [],
+    projectiles: [],
+    callouts: [],
+    soundEvents: [],
+    stats: createBlankMatchStats(),
+    enemyWaveTimer: 72,
+    enemyBuildStage: 0,
+    lastUnderAttackHornSec: -30,
+    recentTauntSec: -30,
+    ghostBreach: null,
+  };
+
+  // 1. Raiding Player Southern Base + Raider Vanguard
+  spawnBuilding(state, 'player', 'town_center', PLAYER_TC_POS.x, PLAYER_TC_POS.y, true);
+  const pv1 = spawnUnit(state, 'player', 'villager', 8.5, 13.5);
+  pv1.order = { type: 'gather', tileX: 6, tileY: 13, resource: 'wood' };
+  const pv2 = spawnUnit(state, 'player', 'villager', 11.5, 12.5);
+  pv2.order = { type: 'gather', tileX: 12, tileY: 11, resource: 'food' };
+  const pv3 = spawnUnit(state, 'player', 'villager', 8.5, 11.6);
+  pv3.order = { type: 'gather', tileX: 7, tileY: 11, resource: 'gold' };
+
+  // Raiding vanguard: 2 Men-at-Arms, 2 Archers, 1 Scout
+  spawnUnit(state, 'player', 'militia', 9.2, 10.6);
+  spawnUnit(state, 'player', 'militia', 10.2, 10.6);
+  spawnUnit(state, 'player', 'archer', 8.7, 11.2);
+  spawnUnit(state, 'player', 'archer', 10.7, 11.2);
+  spawnUnit(state, 'player', 'scout', 9.7, 9.9);
+
+  // 2. Defender Fortress on Northern Half (180-degree reflection if tx + ty > 15)
+  const orderedDefenderBlds = [...target.buildings].sort((a, b) =>
+    a.kind === 'town_center' ? -1 : b.kind === 'town_center' ? 1 : 0,
+  );
+  for (const item of orderedDefenderBlds) {
+    const size = BUILDINGS[item.kind].size;
+    let bx = item.tileX;
+    let by = item.tileY;
+    if (bx + by > 15) {
+      bx = MAP_SIZE - 1 - bx - (size - 1);
+      by = MAP_SIZE - 1 - by - (size - 1);
+    }
+    placeBlueprintBuilding(state, 'enemy', item.kind, bx, by);
+  }
+
+  let enemyTc = state.buildings.find((b) => b.team === 'enemy' && b.kind === 'town_center');
+  if (!enemyTc) {
+    enemyTc =
+      placeBlueprintBuilding(state, 'enemy', 'town_center', ENEMY_TC_POS.x, ENEMY_TC_POS.y) ??
+      spawnBuilding(state, 'enemy', 'town_center', ENEMY_TC_POS.x, ENEMY_TC_POS.y, true);
+  }
+
+  // Spawn Defender Garrison + 2 base villagers
+  const defenderGarrison: UnitKind[] =
+    target.garrison.length > 0 ? target.garrison.slice(0, 12) : ['pikeman', 'archer', 'militia'];
+  spawnUnitsAroundKeep(state, 'enemy', defenderGarrison, enemyTc);
+  spawnUnitsAroundKeep(state, 'enemy', ['villager', 'villager'], enemyTc);
+
+  spawnSymmetricWildHorses(state);
   recomputeFog(state);
   return state;
 }
@@ -649,7 +1125,12 @@ function moveUnitToward(
   dt: number,
   goalFootprint = 1,
 ) {
-  const st = getEffectiveUnitStats(state.spec, unit.team, unit.kind);
+  const st = getEffectiveUnitStats(
+    state.spec,
+    unit.team,
+    unit.kind,
+    countTamedHorses(state, unit.team),
+  );
   unit.pathCooldown = Math.max(0, unit.pathCooldown - dt);
 
   if (unit.path.length === 0 && unit.pathCooldown <= 0) {
@@ -670,11 +1151,18 @@ function moveUnitToward(
     return;
   }
   const step = Math.min(dist, st.speed * dt);
-  const nx = unit.x + (dx / dist) * step;
-  const ny = unit.y + (dy / dist) * step;
+  const nx = Math.max(0.15, Math.min(state.mapSize - 0.15, unit.x + (dx / dist) * step));
+  const ny = Math.max(0.15, Math.min(state.mapSize - 0.15, unit.y + (dy / dist) * step));
+  const curTx = Math.floor(unit.x);
+  const curTy = Math.floor(unit.y);
+  const curBlocked =
+    inBounds(curTx, curTy, state.mapSize) && blocked[curTy * state.mapSize + curTx] !== 0;
   const ntx = Math.floor(nx);
   const nty = Math.floor(ny);
-  if (inBounds(ntx, nty, state.mapSize) && blocked[nty * state.mapSize + ntx] === 0) {
+  if (
+    inBounds(ntx, nty, state.mapSize) &&
+    (blocked[nty * state.mapSize + ntx] === 0 || (curBlocked && ntx === curTx && nty === curTy))
+  ) {
     unit.x = nx;
     unit.y = ny;
     unit.animPhase += dt * st.speed * 4.2;
@@ -974,6 +1462,205 @@ function stepEnemyAI(state: GameState) {
   }
 }
 
+function stepWildHorses(state: GameState, blocked: Uint8Array, dt: number) {
+  if (!state.horses || state.horses.length === 0) return;
+
+  for (const horse of state.horses) {
+    // Traditional AoE herding/taming when any unit steps within 1.5 tiles
+    if (horse.team === 'neutral') {
+      let tamer: Unit | null = null;
+      let bestDist = 1.5;
+      for (const u of state.units) {
+        if (u.hp <= 0) continue;
+        const d = Math.hypot(u.x - horse.x, u.y - horse.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          tamer = u;
+        }
+      }
+      if (tamer) {
+        horse.team = tamer.team;
+        horse.wanderTimer = 0;
+        state.resources[tamer.team].food += 35;
+        if (tamer.team === 'player') {
+          state.stats.horsesTamed = (state.stats.horsesTamed ?? 0) + 1;
+          state.stats.foodGathered += 35;
+          addCallout(state, horse.x, horse.y - 0.3, 'Horse Tamed! +35 Food', '#fde68a', 1.6);
+          emitSound(state, 'military_spawn');
+        }
+      }
+    }
+
+    horse.wanderTimer -= dt;
+
+    if (horse.team === 'neutral') {
+      let home = WILD_HORSE_MEADOWS[0];
+      let bestHomeDist = Math.hypot(horse.x - home.x, horse.y - home.y);
+      for (let i = 1; i < WILD_HORSE_MEADOWS.length; i++) {
+        const d = Math.hypot(horse.x - WILD_HORSE_MEADOWS[i].x, horse.y - WILD_HORSE_MEADOWS[i].y);
+        if (d < bestHomeDist) {
+          bestHomeDist = d;
+          home = WILD_HORSE_MEADOWS[i];
+        }
+      }
+
+      if (horse.wanderTimer <= 0) {
+        horse.wanderTimer = 2.6 + ((state.tick + horse.id * 7) % 5) * 0.45;
+        const angle = (state.tick * 0.63 + horse.id * 2.39996) % (Math.PI * 2);
+        const radius = 0.35 + ((state.tick + horse.id * 3) % 3) * 0.22;
+        const candX = Math.max(0.5, Math.min(state.mapSize - 0.5, home.x + Math.cos(angle) * radius));
+        const candY = Math.max(0.5, Math.min(state.mapSize - 0.5, home.y + Math.sin(angle) * radius));
+        const ctx = Math.floor(candX);
+        const cty = Math.floor(candY);
+        if (
+          inBounds(ctx, cty, state.mapSize) &&
+          state.tiles[cty * state.mapSize + ctx]?.kind === 'grass' &&
+          blocked[cty * state.mapSize + ctx] === 0 &&
+          Math.hypot(candX - home.x, candY - home.y) <= 1.45
+        ) {
+          horse.targetX = candX;
+          horse.targetY = candY;
+        } else {
+          horse.targetX = home.x;
+          horse.targetY = home.y;
+        }
+      }
+
+      const dx = horse.targetX - horse.x;
+      const dy = horse.targetY - horse.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0.08) {
+        if (Math.abs(dx - dy) > 0.02) {
+          horse.facing = dx - dy >= 0 ? 1 : -1;
+        }
+        const step = Math.min(dist, 0.72 * dt);
+        const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.x + (dx / dist) * step));
+        const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.y + (dy / dist) * step));
+        const ntx = Math.floor(nx);
+        const nty = Math.floor(ny);
+        if (
+          inBounds(ntx, nty, state.mapSize) &&
+          state.tiles[nty * state.mapSize + ntx]?.kind === 'grass' &&
+          blocked[nty * state.mapSize + ntx] === 0
+        ) {
+          horse.x = nx;
+          horse.y = ny;
+          horse.animPhase += dt * 3.2;
+        } else {
+          horse.targetX = horse.x;
+          horse.targetY = horse.y;
+        }
+      }
+    } else {
+      // Tamed horse: trot back to graze peacefully near friendly Stable (if built) or Town Center
+      const stable = state.buildings.find(
+        (b) => b.team === horse.team && b.hp > 0 && b.built && b.kind === 'stable',
+      );
+      const homeBld =
+        stable ??
+        state.buildings.find(
+          (b) => b.team === horse.team && b.hp > 0 && b.kind === 'town_center',
+        );
+      if (!homeBld) continue;
+
+      const anchorX = homeBld.tileX + homeBld.size / 2;
+      const anchorY = homeBld.tileY + homeBld.size / 2;
+      const distToAnchor = Math.hypot(horse.x - anchorX, horse.y - anchorY);
+
+      if (distToAnchor > 2.6) {
+        if (horse.wanderTimer <= 0) {
+          horse.wanderTimer = 0.65;
+          const path = findPath(
+            blocked,
+            state.mapSize,
+            horse.x,
+            horse.y,
+            homeBld.tileX,
+            homeBld.tileY,
+            homeBld.size,
+          );
+          if (path.length > 0) {
+            horse.targetX = path[0].x;
+            horse.targetY = path[0].y;
+          }
+        }
+        const dx = horse.targetX - horse.x;
+        const dy = horse.targetY - horse.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= 0.18) {
+          horse.wanderTimer = 0;
+        } else {
+          if (Math.abs(dx - dy) > 0.02) {
+            horse.facing = dx - dy >= 0 ? 1 : -1;
+          }
+          const step = Math.min(dist, 2.35 * dt);
+          const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.x + (dx / dist) * step));
+          const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.y + (dy / dist) * step));
+          const ntx = Math.floor(nx);
+          const nty = Math.floor(ny);
+          if (inBounds(ntx, nty, state.mapSize) && blocked[nty * state.mapSize + ntx] === 0) {
+            horse.x = nx;
+            horse.y = ny;
+            horse.animPhase += dt * 7.5;
+          } else {
+            horse.wanderTimer = 0;
+          }
+        }
+      } else {
+        if (horse.wanderTimer <= 0) {
+          horse.wanderTimer = 2.5 + ((state.tick + horse.id * 5) % 4) * 0.5;
+          const angle = (state.tick * 0.51 + horse.id * 1.91) % (Math.PI * 2);
+          const ringR = homeBld.size * 0.7 + 0.85;
+          const gx = Math.max(0.5, Math.min(state.mapSize - 0.5, anchorX + Math.cos(angle) * ringR));
+          const gy = Math.max(0.5, Math.min(state.mapSize - 0.5, anchorY + Math.sin(angle) * ringR));
+          const gtx = Math.floor(gx);
+          const gty = Math.floor(gy);
+          if (
+            inBounds(gtx, gty, state.mapSize) &&
+            isTileWalkable(state.tiles[gty * state.mapSize + gtx]) &&
+            blocked[gty * state.mapSize + gtx] === 0
+          ) {
+            horse.targetX = gx;
+            horse.targetY = gy;
+          } else {
+            const near = nearestWalkableTile(
+              blocked,
+              state.mapSize,
+              homeBld.tileX,
+              homeBld.tileY,
+              horse.x,
+              horse.y,
+              homeBld.size,
+            );
+            if (near) {
+              horse.targetX = near.x + 0.5;
+              horse.targetY = near.y + 0.5;
+            }
+          }
+        }
+        const dx = horse.targetX - horse.x;
+        const dy = horse.targetY - horse.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0.1) {
+          if (Math.abs(dx - dy) > 0.02) {
+            horse.facing = dx - dy >= 0 ? 1 : -1;
+          }
+          const step = Math.min(dist, 0.78 * dt);
+          const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.x + (dx / dist) * step));
+          const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.y + (dy / dist) * step));
+          const ntx = Math.floor(nx);
+          const nty = Math.floor(ny);
+          if (inBounds(ntx, nty, state.mapSize) && blocked[nty * state.mapSize + ntx] === 0) {
+            horse.x = nx;
+            horse.y = ny;
+            horse.animPhase += dt * 3.2;
+          }
+        }
+      }
+    }
+  }
+}
+
 export function stepGame(state: GameState, dt: number) {
   if (state.outcome !== 'playing') return;
   state.timeSec += dt;
@@ -981,7 +1668,7 @@ export function stepGame(state: GameState, dt: number) {
 
   const blocked = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
 
-  // 1. Update buildings: self-assembly progress, training queues, tower/TC arrows
+  // 1. Update buildings: self-assembly progress, farms, training queues, tower/TC arrows
   const buildSpeedMult = state.spec.modifier === 'timber_boom' ? 1.35 : 1.0;
   for (const b of state.buildings) {
     if (b.hp <= 0) continue;
@@ -993,10 +1680,38 @@ export function stepGame(state: GameState, dt: number) {
       if (b.buildProgress >= 1) {
         b.built = true;
         b.hp = b.maxHp;
+        if (b.kind === 'farm') b.attackTimer = 2.5;
         if (b.team === 'player') {
           state.stats.buildingsBuilt++;
           emitSound(state, 'build_done');
           addCallout(state, b.tileX + 0.5, b.tileY + 0.5, `${spec.shortName} Ready!`, '#86efac', 1.5);
+        }
+      }
+      continue;
+    }
+
+    // Traditional AoE Wheat Farm continuous Food yield (+2 passive, +4 when tended by nearby villager)
+    if (b.kind === 'farm') {
+      b.attackTimer -= dt;
+      if (b.attackTimer <= 0) {
+        b.attackTimer += 2.5;
+        if (b.attackTimer <= 0) b.attackTimer = 2.5;
+        const fx = b.tileX + 0.5;
+        const fy = b.tileY + 0.5;
+        const tended = state.units.some(
+          (u) =>
+            u.team === b.team &&
+            u.hp > 0 &&
+            u.kind === 'villager' &&
+            Math.hypot(u.x - fx, u.y - fy) <= 1.6,
+        );
+        const yieldFood = tended ? 4 : 2;
+        state.resources[b.team].food += yieldFood;
+        if (b.team === 'player') {
+          state.stats.foodGathered += yieldFood;
+          if (tended || (state.tick + b.id * 7) % 2 === 0) {
+            addCallout(state, fx, fy - 0.15, `+${yieldFood} Farm`, '#fde68a', 1.1);
+          }
         }
       }
       continue;
@@ -1017,8 +1732,8 @@ export function stepGame(state: GameState, dt: number) {
           b.rallyY,
           1,
         );
-        const sx = spawnSpot[0]?.x ?? b.rallyX;
-        const sy = spawnSpot[0]?.y ?? b.rallyY;
+        const sx = Math.max(0.5, Math.min(state.mapSize - 0.5, spawnSpot[0]?.x ?? b.rallyX));
+        const sy = Math.max(0.5, Math.min(state.mapSize - 0.5, spawnSpot[0]?.y ?? b.rallyY));
         const u = spawnUnit(state, b.team, head.unit, sx, sy);
         if (b.team === 'player') {
           if (head.unit === 'villager') {
@@ -1080,12 +1795,22 @@ export function stepGame(state: GameState, dt: number) {
     }
   }
 
+  // 1b. Update Wild Horses (wandering, AoE herding/taming, and Stable homing)
+  stepWildHorses(state, blocked, dt);
+
   // 2. Update units
+  const playerHorses = countTamedHorses(state, 'player');
+  const enemyHorses = countTamedHorses(state, 'enemy');
   for (const u of state.units) {
     if (u.hp <= 0) continue;
     u.attackTimer = Math.max(0, u.attackTimer - dt);
     u.monkCooldown = Math.max(0, u.monkCooldown - dt);
-    const st = getEffectiveUnitStats(state.spec, u.team, u.kind);
+    const st = getEffectiveUnitStats(
+      state.spec,
+      u.team,
+      u.kind,
+      u.team === 'player' ? playerHorses : enemyHorses,
+    );
 
     // Monk passive ally healing when not actively converting
     if (u.kind === 'monk' && u.order.type !== 'convert' && u.attackTimer <= 0) {
@@ -1202,6 +1927,7 @@ export function stepGame(state: GameState, dt: number) {
         if (site.buildProgress >= 1) {
           site.built = true;
           site.hp = site.maxHp;
+          if (site.kind === 'farm') site.attackTimer = 2.5;
           u.order = { type: 'idle' };
           if (site.team === 'player') {
             state.stats.buildingsBuilt++;
@@ -1237,13 +1963,24 @@ export function stepGame(state: GameState, dt: number) {
             if (u.carryKind === 'wood') state.stats.woodGathered += u.carryAmount;
             if (u.carryKind === 'food') state.stats.foodGathered += u.carryAmount;
             if (u.carryKind === 'gold') state.stats.goldGathered += u.carryAmount;
-            const label = u.carryKind === 'wood' ? 'Wood' : u.carryKind === 'food' ? 'Food' : 'Gold';
+            const gatherTile = state.tiles[tileY * state.mapSize + tileX];
+            const isFishLoad =
+              u.carryKind === 'food' &&
+              Boolean(gatherTile && (gatherTile.kind === 'fish' || gatherTile.kind === 'water'));
+            const label =
+              u.carryKind === 'wood'
+                ? 'Wood'
+                : u.carryKind === 'gold'
+                  ? 'Gold'
+                  : isFishLoad
+                    ? 'Fish'
+                    : 'Food';
             addCallout(
               state,
               drop.tileX + drop.size / 2,
               drop.tileY + 0.3,
               `+${u.carryAmount} ${label}`,
-              u.carryKind === 'gold' ? '#fde047' : '#d9f99d',
+              u.carryKind === 'gold' ? '#fde047' : isFishLoad ? '#7dd3fc' : '#d9f99d',
               1.0,
             );
           }
@@ -1256,7 +1993,7 @@ export function stepGame(state: GameState, dt: number) {
         continue;
       }
 
-      // Walk to resource tile and harvest
+      // Walk to resource tile (or adjacent shore bank for Pond Fish) and harvest
       const tile = state.tiles[tileY * state.mapSize + tileX];
       if (!tile || tile.amount <= 0 || tileToResource(tile.kind) !== resource) {
         const nextTile = findNearestResourceTile(state, resource, u.x, u.y, 7);
@@ -1269,11 +2006,19 @@ export function stepGame(state: GameState, dt: number) {
         continue;
       }
 
+      const isFishing = tile.kind === 'fish';
+      const harvestReach = isFishing ? 1.75 : 1.55;
       const dTile = Math.hypot(tileX + 0.5 - u.x, tileY + 0.5 - u.y);
-      if (dTile <= 1.55) {
-        let rate = 4.2; // units per second -> 10 in ~2.4s
+      if (dTile <= harvestReach) {
+        let rate = 4.2; // units per second -> 10 in ~2.4s (faster for AoE shore fishing!)
+        if (isFishing) rate *= 1.45;
         if (resource === 'gold' && state.spec.modifier === 'gold_fever') rate *= 1.45;
         if (resource === 'wood' && state.spec.modifier === 'timber_boom') rate *= 1.45;
+        const fdx = tileX + 0.5 - u.x;
+        const fdy = tileY + 0.5 - u.y;
+        if (Math.abs(fdx - fdy) > 0.02) {
+          u.facing = fdx - fdy >= 0 ? 1 : -1;
+        }
         u.animPhase += dt * 8;
         u.harvestTimer += dt * rate;
         if (u.harvestTimer >= 2) {
@@ -1286,7 +2031,7 @@ export function stepGame(state: GameState, dt: number) {
             emitSound(state, resource === 'gold' ? 'gold_clink' : 'wood_chop');
           }
           if (tile.amount <= 0) {
-            tile.kind = 'grass';
+            tile.kind = isFishing ? 'water' : 'grass';
             tile.maxAmount = 0;
           }
         }
@@ -1439,10 +2184,12 @@ export function stepGame(state: GameState, dt: number) {
     if (state.callouts[i].ttl <= 0) state.callouts.splice(i, 1);
   }
 
-  // 5. Step Rival AI once per second
-  state.enemyWaveTimer -= dt;
-  if (state.tick % 20 === 0 && state.outcome === 'playing') {
-    stepEnemyAI(state);
+  // 5. Step Rival AI once per second (disabled in peaceful base_builder mode)
+  if (state.mode !== 'base_builder') {
+    state.enemyWaveTimer -= dt;
+    if (state.tick % 20 === 0 && state.outcome === 'playing') {
+      stepEnemyAI(state);
+    }
   }
 
   // 6. Refresh Player Fog of War every 4 ticks

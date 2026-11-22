@@ -3,10 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
+  DEFAULT_SEEDED_BASES,
   EmpireValidationError,
   getDailyWarRoom,
   isValidDateKey,
+  listPlayerBases,
   recordMatchCompletion,
+  recordRaidResult,
+  savePlayerBase,
   submitWarChronicleComment,
   tryAwardUserFlair,
   yesterdayDateKey,
@@ -565,4 +569,59 @@ test('recordMatchCompletion rejects invalid inputs and devvit.json has valid Poc
   assert.equal(devvitConfig.permissions.reddit, true);
   assert.match(devvitConfig.menu.items[0].label, /Pocket Empires/);
   assert.match(devvitConfig.menu.items[0].description, /Pocket Empires — Daily 3-Minute RTS Siege/);
+});
+
+test('Clash-of-Clans player base storage merges seeded bases, validates footprints, and updates raid trophies', async () => {
+  const redis = createFakeRedis();
+  const initialBases = await listPlayerBases(redis);
+  assert.equal(initialBases.length, DEFAULT_SEEDED_BASES.length);
+
+  // Saving a base without a town_center returns null
+  const invalid = await savePlayerBase(redis, {
+    owner: 'joan_of_arc',
+    empireName: 'No Keep',
+    civ: 'franks',
+    biome: 'sherwood',
+    buildings: [{ kind: 'stone_wall', tileX: 8, tileY: 10 }],
+    garrison: ['knight'],
+  });
+  assert.equal(invalid, null);
+
+  // Valid player base saves cleanly and appears in listPlayerBases
+  const saved = await savePlayerBase(redis, {
+    owner: 'joan_of_arc',
+    empireName: 'Orleans Citadel',
+    civ: 'franks',
+    biome: 'sherwood',
+    buildings: [
+      { kind: 'town_center', tileX: 9, tileY: 12 },
+      { kind: 'stone_wall', tileX: 8, tileY: 10 },
+      { kind: 'farm', tileX: 11, tileY: 12 },
+    ],
+    garrison: ['knight', 'pikeman'],
+  });
+  assert.ok(saved);
+  assert.equal(saved.trophies, 1000);
+
+  const afterSave = await listPlayerBases(redis);
+  assert.ok(afterSave.some((b) => b.owner === 'joan_of_arc'));
+
+  // Successful raid vs TheViper_AoE grants +25 trophies to attacker and -10 to defender
+  const viperInitialRaids = DEFAULT_SEEDED_BASES.find((b) => b.owner === 'TheViper_AoE')!.raidsPlayed;
+  const raidWin = await recordRaidResult(redis, {
+    attacker: 'joan_of_arc',
+    defender: 'TheViper_AoE',
+    victory: true,
+  });
+  assert.equal(raidWin.trophiesDelta, 25);
+  assert.equal(raidWin.defenderBase?.raidsPlayed, viperInitialRaids + 1);
+
+  // Failed raid vs joan_of_arc awards +15 defense trophies & increments defenseWins
+  const raidLoss = await recordRaidResult(redis, {
+    attacker: 'LordDaut',
+    defender: 'joan_of_arc',
+    victory: false,
+  });
+  assert.equal(raidLoss.defenderBase?.defenseWins, 1);
+  assert.equal(raidLoss.defenderBase?.trophies, 1040);
 });

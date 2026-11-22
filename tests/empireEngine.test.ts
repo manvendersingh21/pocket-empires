@@ -36,14 +36,19 @@ const {
 } = await import('../src/engine/dailyGenerator.ts');
 const { buildBlockedGrid, findPath, isTileWalkable } = await import('../src/engine/pathfinding.ts');
 const {
-   canPlaceBuilding,
+  canPlaceBuilding,
   cmdIssueOrder,
   cmdPlaceBuilding,
   cmdTrainUnit,
   cmdTriggerTaunt,
   computeScoreSummary,
+  countTamedHorses,
+  createBaseBuilderState,
   createInitialState,
+  createPlayerRaidState,
+  exportBaseBlueprint,
   formatChronicleComment,
+  getEffectiveUnitStats,
   getTeamPop,
   stepGame,
 } = await import('../src/engine/sim.ts');
@@ -602,5 +607,81 @@ describe('Score Summary & Chronicle Formatting', () => {
     const customDefeat = formatChronicleComment(state, 1);
     assert.match(customDefeat, /Custom Skirmish "Gilded Basin of Antioch"/);
     assert.match(customDefeat, /💀 Fallen Keep/);
+  });
+});
+
+describe('AoE Pond Fish, Wild Horses, Farms, Walls & Clash Base Raids', () => {
+  test('pond fish shore harvesting yields food and turns depleted pond into water', () => {
+    const state = createInitialState(makeNeutralSpec());
+    const fishTile = state.tiles.find((t: MapTile) => t.kind === 'fish' && t.x + t.y > 16);
+    assert.ok(fishTile, 'Expected symmetric player-side pond fish tile');
+    fishTile.amount = 10;
+
+    const villager = state.units.find((u) => u.team === 'player' && u.kind === 'villager')!;
+    villager.x = fishTile.x + 0.5;
+    villager.y = Math.max(0.5, fishTile.y - 0.6);
+    const order = cmdIssueOrder(state, 'player', [villager.id], fishTile.x, fishTile.y);
+    assert.equal(order, 'gather');
+
+    const foodBefore = state.resources.player.food;
+    for (let i = 0; i < 200; i++) {
+      state.enemyWaveTimer = 999;
+      stepGame(state, 0.05);
+    }
+    assert.ok(state.resources.player.food > foodBefore, 'Expected shore fishing to increase player food');
+    assert.equal(fishTile.kind, 'water', 'Depleted fish pond should become water, not grass');
+  });
+
+  test('wild horses tame on unit proximity (+35 food) and boost cavalry speed', () => {
+    const state = createInitialState(makeNeutralSpec());
+    assert.ok((state.horses?.length ?? 0) >= 4, 'Expected symmetric wild horses on initial map');
+    const wild = state.horses!.find((h) => h.team === 'neutral')!;
+    const scout = state.units.find((u) => u.team === 'player' && u.kind === 'scout')!;
+    const baseSpeed = getEffectiveUnitStats(state.spec, 'player', 'scout', 0).speed;
+
+    const foodBefore = state.resources.player.food;
+    scout.x = wild.x + 0.3;
+    scout.y = wild.y + 0.3;
+    stepGame(state, 0.05);
+
+    assert.equal(wild.team, 'player');
+    assert.equal(countTamedHorses(state, 'player'), 1);
+    assert.equal(state.resources.player.food, foodBefore + 35);
+    const boostedSpeed = getEffectiveUnitStats(state.spec, 'player', 'scout', 1).speed;
+    assert.ok(boostedSpeed > baseSpeed, 'Expected tamed horse to boost Scout Cavalry speed');
+  });
+
+  test('farms remain walkable while stone walls block movement, and base blueprints round-trip into raids', () => {
+    const builder = createBaseBuilderState(null, 'LadyAethelflaed');
+    assert.equal(builder.mode, 'base_builder');
+    assert.equal(builder.buildings.filter((b) => b.team === 'enemy').length, 0);
+
+    const farm = cmdPlaceBuilding(builder, 'player', 'farm', 11, 12);
+    const wall = cmdPlaceBuilding(builder, 'player', 'stone_wall', 8, 10);
+    assert.ok(farm, 'Expected farm placement to succeed');
+    assert.ok(wall, 'Expected stone_wall placement to succeed');
+    farm!.built = true;
+    wall!.built = true;
+
+    const blocked = buildBlockedGrid(builder.tiles, builder.buildings, builder.mapSize);
+    assert.equal(blocked[12 * builder.mapSize + 11], 0, 'Wheat farms must remain walkable');
+    assert.equal(blocked[10 * builder.mapSize + 8], 1, 'Stone walls must block enemy pathing');
+
+    const blueprint = exportBaseBlueprint(builder, 'LadyAethelflaed', 'Iron Pond Keep');
+    assert.equal(blueprint.owner, 'LadyAethelflaed');
+    assert.ok(blueprint.buildings.some((b) => b.kind === 'stone_wall'));
+    assert.ok(blueprint.buildings.some((b) => b.kind === 'farm'));
+
+    const raid = createPlayerRaidState(blueprint, 'vikings');
+    assert.equal(raid.mode, 'raid');
+    assert.equal(raid.raidTargetOwner, 'LadyAethelflaed');
+    assert.ok(
+      raid.buildings.some((b) => b.team === 'enemy' && b.kind === 'stone_wall'),
+      'Expected defender walls spawned on raid battlefield',
+    );
+    assert.ok(
+      raid.buildings.some((b) => b.team === 'enemy' && b.kind === 'town_center'),
+      'Expected defender Town Center spawned on raid battlefield',
+    );
   });
 });

@@ -19,7 +19,10 @@ import {
   cmdTrainUnit,
   cmdTriggerTaunt,
   computeScoreSummary,
+  createBaseBuilderState,
   createInitialState,
+  createPlayerRaidState,
+  exportBaseBlueprint,
   formatChronicleComment,
   getTeamPop,
   stepGame,
@@ -29,12 +32,14 @@ import type { ClientMessage } from '../shared/messages.js';
 import type {
   BuildingKind,
   GameState,
+  PlayerBaseBlueprint,
   SkirmishSpec,
   TauntId,
   UnitKind,
 } from '../types/rts.js';
 import ChronicleModal from '../ui/ChronicleModal.js';
 import EmpireHud, { type HudSnapshot } from '../ui/EmpireHud.js';
+import SettingsModal from '../ui/SettingsModal.js';
 import {
   flushStateSounds,
   playTauntSound,
@@ -53,7 +58,73 @@ import {
 import { journeys } from './telemetry.js';
 
 const READY: ClientMessage = { type: 'READY', app: 'momentum', version: 1 };
-const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const isLocalHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const hasApiServer = !isLocalHost || window.location.port === '3000';
+
+const LOCAL_FALLBACK_BASES: PlayerBaseBlueprint[] = [
+  {
+    owner: 'TheViper_AoE',
+    empireName: 'Twin-Pond Bastion',
+    civ: 'franks',
+    biome: 'sherwood',
+    buildings: [
+      { kind: 'town_center', tileX: 9, tileY: 12 },
+      { kind: 'homestead', tileX: 8, tileY: 13 },
+      { kind: 'farm', tileX: 11, tileY: 12 },
+      { kind: 'farm', tileX: 11, tileY: 13 },
+      { kind: 'stable', tileX: 8, tileY: 11 },
+      { kind: 'watchtower', tileX: 8, tileY: 10 },
+      { kind: 'watchtower', tileX: 11, tileY: 10 },
+      { kind: 'stone_wall', tileX: 9, tileY: 10 },
+      { kind: 'stone_wall', tileX: 10, tileY: 10 },
+    ],
+    garrison: ['knight', 'knight', 'pikeman', 'archer'],
+    defenseWins: 7,
+    raidsPlayed: 11,
+    trophies: 1180,
+    updatedAt: '2026-11-21T00:00:00Z',
+  },
+  {
+    owner: 'LordDaut',
+    empireName: "Daut's Keep",
+    civ: 'britons',
+    biome: 'highlands',
+    buildings: [
+      { kind: 'town_center', tileX: 9, tileY: 12 },
+      { kind: 'homestead', tileX: 11, tileY: 12 },
+      { kind: 'farm', tileX: 8, tileY: 13 },
+      { kind: 'barracks', tileX: 8, tileY: 11 },
+      { kind: 'archery_range', tileX: 11, tileY: 11 },
+      { kind: 'watchtower', tileX: 9, tileY: 10 },
+      { kind: 'stone_wall', tileX: 8, tileY: 10 },
+      { kind: 'stone_wall', tileX: 10, tileY: 10 },
+    ],
+    garrison: ['archer', 'archer', 'archer', 'militia', 'pikeman'],
+    defenseWins: 5,
+    raidsPlayed: 9,
+    trophies: 1095,
+    updatedAt: '2026-11-21T00:00:00Z',
+  },
+  {
+    owner: 'SpiritOfTheLaw',
+    empireName: 'Monastery Sanctum',
+    civ: 'byzantines',
+    biome: 'gold_rush',
+    buildings: [
+      { kind: 'town_center', tileX: 9, tileY: 12 },
+      { kind: 'farm', tileX: 11, tileY: 12 },
+      { kind: 'monastery', tileX: 8, tileY: 11 },
+      { kind: 'watchtower', tileX: 10, tileY: 10 },
+      { kind: 'stone_wall', tileX: 8, tileY: 10 },
+      { kind: 'stone_wall', tileX: 9, tileY: 10 },
+    ],
+    garrison: ['monk', 'monk', 'knight', 'pikeman'],
+    defenseWins: 4,
+    raidsPlayed: 7,
+    trophies: 1040,
+    updatedAt: '2026-11-21T00:00:00Z',
+  },
+];
 
 function loadLocal<T>(key: string, fallback: T): T {
   try {
@@ -122,8 +193,20 @@ export default function App() {
     return (code && decodeSkirmishCode(code)) || dailySpec;
   });
 
+  const [myBase, setMyBase] = useState<PlayerBaseBlueprint | null>(() =>
+    loadLocal<PlayerBaseBlueprint | null>('empire:myBase', null),
+  );
+  const [playerBases, setPlayerBases] = useState<PlayerBaseBlueprint[]>(() => {
+    const saved = loadLocal<PlayerBaseBlueprint | null>('empire:myBase', null);
+    return saved ? [saved, ...LOCAL_FALLBACK_BASES] : LOCAL_FALLBACK_BASES;
+  });
+
   const [screen, setScreen] = useState<'war_room' | 'game'>('war_room');
-  const stateRef = useRef<GameState>(createInitialState(activeSpec));
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showMinimap, setShowMinimap] = useState(true);
+  const [publishStatus, setPublishStatus] = useState<'idle' | 'publishing' | 'published' | 'saved'>('idle');
+
+  const stateRef = useRef<GameState>(createBaseBuilderState(myBase));
   const accRef = useRef(0);
   const [snapshot, setSnapshot] = useState<HudSnapshot>(() => makeSnapshot(stateRef.current));
   const [selectedUnitIds, setSelectedUnitIds] = useState<number[]>([]);
@@ -157,22 +240,39 @@ export default function App() {
   const completionHandledRef = useRef<string>('');
   const matchIdRef = useRef(0);
 
-  const fetchWarRoom = useCallback(async () => {
-    if (isLocal) return;
+  const fetchWarRoomAndBases = useCallback(async () => {
+    if (!hasApiServer) return;
     try {
-      const res = await fetch(`/api/empire/daily?date=${encodeURIComponent(dailySpec.dateKey)}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        leaderboard?: LeaderboardRow[];
-        community?: CommunityWarStats;
-        player?: { streak?: number; bestScore?: number | null; rank?: number | null };
-      };
-      if (data.leaderboard) setLeaderboard(data.leaderboard);
-      if (data.community) setCommunity(data.community);
-      if (data.player) {
-        if (typeof data.player.streak === 'number') setStreak(data.player.streak);
-        if (typeof data.player.bestScore === 'number') setBestScore(data.player.bestScore);
-        setRank(data.player.rank ?? null);
+      const [dailyRes, basesRes] = await Promise.all([
+        fetch(`/api/empire/daily?date=${encodeURIComponent(dailySpec.dateKey)}`),
+        fetch('/api/empire/bases'),
+      ]);
+      if (dailyRes.ok) {
+        const data = (await dailyRes.json()) as {
+          leaderboard?: LeaderboardRow[];
+          community?: CommunityWarStats;
+          player?: { streak?: number; bestScore?: number | null; rank?: number | null };
+        };
+        if (data.leaderboard) setLeaderboard(data.leaderboard);
+        if (data.community) setCommunity(data.community);
+        if (data.player) {
+          if (typeof data.player.streak === 'number') setStreak(data.player.streak);
+          if (typeof data.player.bestScore === 'number') setBestScore(data.player.bestScore);
+          setRank(data.player.rank ?? null);
+        }
+      }
+      if (basesRes.ok) {
+        const bData = (await basesRes.json()) as {
+          bases?: PlayerBaseBlueprint[];
+          myBase?: PlayerBaseBlueprint | null;
+        };
+        if (bData.bases && bData.bases.length > 0) {
+          setPlayerBases(bData.bases);
+        }
+        if (bData.myBase) {
+          setMyBase(bData.myBase);
+          saveLocal('empire:myBase', bData.myBase);
+        }
       }
     } catch {
       return;
@@ -183,23 +283,40 @@ export default function App() {
     void detectHybridAICapability().then((cap) => {
       setAiModeLabel(cap.modeLabel);
     });
-    if (!isLocal) {
+    if (hasApiServer) {
       void fetch('/api/ping', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(READY),
       }).catch(() => undefined);
-      void fetchWarRoom();
+      void fetchWarRoomAndBases();
     }
   });
 
+  const mountInteractiveState = useCallback((next: GameState) => {
+    unlockAudio();
+    matchIdRef.current += 1;
+    completionHandledRef.current = '';
+    accRef.current = 0;
+    stateRef.current = next;
+    setActiveSpec(next.spec);
+    setSnapshot(makeSnapshot(next));
+    const idleV = next.units.find(
+      (u) => u.team === 'player' && u.kind === 'villager' && u.order.type === 'idle',
+    );
+    setSelectedUnitIds(idleV ? [idleV.id] : []);
+    setSelectedBuildingId(null);
+    setPlacementKind(null);
+    setCommentStatus('idle');
+    setPublishStatus('idle');
+    setFlairText(null);
+    setSettingsOpen(false);
+    setWhisper(getInstantAdvisorWhisper(next));
+    setScreen('game');
+  }, []);
+
   const startSkirmish = useCallback(
     (spec: SkirmishSpec) => {
-      unlockAudio();
-      matchIdRef.current += 1;
-      completionHandledRef.current = '';
-      accRef.current = 0;
-      setActiveSpec(spec);
       const next = createInitialState(spec);
       if (community.fastestCommander) {
         next.ghostBreach = {
@@ -209,33 +326,92 @@ export default function App() {
           tileY: 7.5,
         };
       }
-      stateRef.current = next;
-      setSnapshot(makeSnapshot(next));
-      const idleV = next.units.find(
-        (u) => u.team === 'player' && u.kind === 'villager' && u.order.type === 'idle',
-      );
-      setSelectedUnitIds(idleV ? [idleV.id] : []);
-      setSelectedBuildingId(null);
-      setPlacementKind(null);
-      setCommentStatus('idle');
-      setFlairText(null);
-      setWhisper(getInstantAdvisorWhisper(next));
-      setScreen('game');
-      if (!isLocal) journeys.start();
+      mountInteractiveState(next);
+      if (!isLocalHost) journeys.start();
     },
-    [community.fastestCommander],
+    [community.fastestCommander, mountInteractiveState],
   );
+
+  const openMyBaseBuilder = useCallback(() => {
+    const next = createBaseBuilderState(myBase);
+    mountInteractiveState(next);
+  }, [myBase, mountInteractiveState]);
+
+  const startPlayerRaid = useCallback(
+    (target: PlayerBaseBlueprint) => {
+      const next = createPlayerRaidState(target, dailySpec.playerCiv);
+      mountInteractiveState(next);
+    },
+    [dailySpec.playerCiv, mountInteractiveState],
+  );
+
+  const returnToHomeOverlay = useCallback(() => {
+    setSettingsOpen(false);
+    setPlacementKind(null);
+    setSelectedUnitIds([]);
+    setSelectedBuildingId(null);
+    const ambient = createBaseBuilderState(myBase);
+    stateRef.current = ambient;
+    setSnapshot(makeSnapshot(ambient));
+    setScreen('war_room');
+  }, [myBase]);
+
+  const handlePublishBase = useCallback(async () => {
+    unlockAudio();
+    const st = stateRef.current;
+    const blueprint = exportBaseBlueprint(st, myBase?.owner ?? 'YourKeep', myBase?.empireName ?? 'Royal Homestead');
+    setMyBase(blueprint);
+    saveLocal('empire:myBase', blueprint);
+    setPlayerBases((prev) => [blueprint, ...prev.filter((b) => b.owner !== blueprint.owner)]);
+
+    if (!hasApiServer) {
+      setPublishStatus('saved');
+      return;
+    }
+
+    setPublishStatus('publishing');
+    try {
+      const res = await fetch('/api/empire/bases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          empireName: blueprint.empireName,
+          civ: blueprint.civ,
+          biome: blueprint.biome,
+          buildings: blueprint.buildings,
+          garrison: blueprint.garrison,
+        }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          saved?: boolean;
+          base?: PlayerBaseBlueprint;
+          bases?: PlayerBaseBlueprint[];
+        };
+        if (data.base) {
+          setMyBase(data.base);
+          saveLocal('empire:myBase', data.base);
+        }
+        if (data.bases) setPlayerBases(data.bases);
+        setPublishStatus('published');
+      } else {
+        setPublishStatus('saved');
+      }
+    } catch {
+      setPublishStatus('saved');
+    }
+  }, [myBase]);
 
   const handleMatchCompletion = useCallback(
     (st: GameState) => {
-      if (st.outcome === 'playing') return;
+      if (st.outcome === 'playing' || st.mode === 'base_builder') return;
       const key = `${matchIdRef.current}:${st.outcome}`;
       if (completionHandledRef.current === key) return;
       completionHandledRef.current = key;
 
       const summary = computeScoreSummary(st);
       let nextStreak = streak;
-      if (summary.victory && !st.spec.isCustom) {
+      if (summary.victory && !st.spec.isCustom && st.mode !== 'raid') {
         if (lastWinDate !== st.spec.dateKey) {
           const yesterday = new Date(Date.parse(`${st.spec.dateKey}T00:00:00Z`) - 86_400_000)
             .toISOString()
@@ -255,9 +431,23 @@ export default function App() {
         setEpigraph(res.epigraph);
       });
 
-      if (!isLocal) {
-        journeys.end(summary.victory, summary.timeSec);
-        if (!st.spec.isCustom) {
+      if (hasApiServer) {
+        if (!isLocalHost) journeys.end(summary.victory, summary.timeSec);
+        if (st.mode === 'raid' && st.raidTargetOwner) {
+          void fetch('/api/empire/raid', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              defender: st.raidTargetOwner,
+              victory: summary.victory,
+            }),
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { bases?: PlayerBaseBlueprint[] } | null) => {
+              if (data?.bases) setPlayerBases(data.bases);
+            })
+            .catch(() => undefined);
+        } else if (!st.spec.isCustom) {
           void fetch('/api/empire/complete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -294,7 +484,8 @@ export default function App() {
     [streak, lastWinDate, bestScore],
   );
 
-  useFixedSimulationLoop(screen === 'game', gameSpeed, (elapsedSec) => {
+  // Keep the living village gently animated at 0.5x behind the translucent Home overlay, and full speed in-game!
+  useFixedSimulationLoop(true, screen === 'war_room' ? 0.5 : gameSpeed, (elapsedSec) => {
     const st = stateRef.current;
     if (st.outcome !== 'playing') {
       accRef.current = 0;
@@ -309,6 +500,12 @@ export default function App() {
       accRef.current -= STEP;
       stepped = true;
     }
+
+    if (screen === 'war_room') {
+      st.soundEvents.length = 0;
+      return;
+    }
+
     if (st.soundEvents.length > 0) {
       flushStateSounds(st.soundEvents);
     }
@@ -337,9 +534,9 @@ export default function App() {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     const st = stateRef.current;
 
-    if (isLocal && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'v') {
+    if (isLocalHost && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'v') {
       e.preventDefault();
-      if (st.outcome !== 'playing') return;
+      if (st.outcome !== 'playing' || st.mode === 'base_builder') return;
       const enemyTc = st.buildings.find(
         (b) => b.team === 'enemy' && b.kind === 'town_center' && b.hp > 0,
       );
@@ -388,7 +585,8 @@ export default function App() {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     if (e.key === 'Escape') {
-      setPlacementKind(null);
+      if (settingsOpen) setSettingsOpen(false);
+      else setPlacementKind(null);
       return;
     }
     if (e.key === '1') {
@@ -415,6 +613,8 @@ export default function App() {
     } else {
       const buildMap: Record<string, BuildingKind> = {
         q: 'homestead',
+        f: 'farm',
+        z: 'stone_wall',
         w: 'barracks',
         e: 'archery_range',
         r: 'stable',
@@ -469,7 +669,9 @@ export default function App() {
     const st = stateRef.current;
     const placed = cmdPlaceBuilding(st, 'player', placementKind, tileX, tileY, selectedUnitIds);
     if (placed) {
-      setPlacementKind(null);
+      if (placementKind !== 'stone_wall') {
+        setPlacementKind(null);
+      }
       flushStateSounds(st.soundEvents);
       setSnapshot(makeSnapshot(st));
     }
@@ -493,12 +695,12 @@ export default function App() {
 
   const handlePostComment = async () => {
     const st = stateRef.current;
-    const code = st.spec.isCustom ? encodeSkirmishCode(st.spec) : null;
+    const code = st.spec.isCustom && st.mode !== 'raid' ? encodeSkirmishCode(st.spec) : null;
     const text =
       formatChronicleComment(st, Math.max(1, streak)) +
-      (code ? `\n🛠️ Challenge Code: \`${code}\`` : '');
+      (code ? `\nChallenge Code: \`${code}\`` : '');
 
-    if (isLocal) {
+    if (!hasApiServer) {
       try {
         await navigator.clipboard?.writeText(text);
         setCommentStatus('copied');
@@ -534,10 +736,10 @@ export default function App() {
 
   const handleCopyChronicle = async () => {
     const st = stateRef.current;
-    const code = st.spec.isCustom ? encodeSkirmishCode(st.spec) : null;
+    const code = st.spec.isCustom && st.mode !== 'raid' ? encodeSkirmishCode(st.spec) : null;
     const text =
       formatChronicleComment(st, Math.max(1, streak)) +
-      (code ? `\n🛠️ Challenge Code: \`${code}\`` : '');
+      (code ? `\nChallenge Code: \`${code}\`` : '');
     try {
       await navigator.clipboard?.writeText(text);
       setCommentStatus('copied');
@@ -546,31 +748,22 @@ export default function App() {
     }
   };
 
-  if (screen === 'war_room') {
-    return (
-      <WarRoomScreen
-        dailySpec={dailySpec}
-        streak={streak}
-        bestScore={bestScore}
-        rank={rank}
-        leaderboard={leaderboard}
-        community={community}
-        aiModeLabel={aiModeLabel}
-        onPlayDaily={() => startSkirmish(dailySpec)}
-        onPlayCustomSpec={(spec) => startSkirmish(spec)}
-        onCraftPrompt={async (prompt) => {
-          const res = await craftSkirmishFromPrompt(prompt);
-          return {
-            spec: res.spec,
-            shareCode: res.shareCode,
-            flavorSummary: res.flavorSummary,
-          };
-        }}
-      />
-    );
-  }
+  const handleCraftPrompt = useCallback(async (prompt: string) => {
+    const res = await craftSkirmishFromPrompt(prompt);
+    return {
+      spec: res.spec,
+      shareCode: res.shareCode,
+      flavorSummary: res.flavorSummary,
+    };
+  }, []);
 
   const st = stateRef.current;
+  const toggleMute = () => {
+    const next = !muted;
+    setMutedState(next);
+    setAudioMuted(next);
+  };
+
   return (
     <main
       style={{
@@ -578,13 +771,15 @@ export default function App() {
         width: '100%',
         height: '100dvh',
         overflow: 'hidden',
-        background: '#14100b',
+        background: '#141814',
         touchAction: 'none',
         userSelect: 'none',
       }}
     >
       <IsoCanvas
         stateRef={stateRef}
+        interactive={screen === 'game'}
+        showMinimap={screen === 'game' && showMinimap}
         selectedUnitIds={selectedUnitIds}
         selectedBuildingId={selectedBuildingId}
         placementKind={placementKind}
@@ -602,52 +797,110 @@ export default function App() {
         onPlaceBuildingAt={handlePlaceBuildingAt}
         onCancelPlacement={() => setPlacementKind(null)}
       />
-      <EmpireHud
-        spec={activeSpec}
-        snapshot={snapshot}
-        selectedUnitIds={selectedUnitIds}
-        selectedBuildingId={selectedBuildingId}
-        placementKind={placementKind}
-        whisper={whisper}
+
+      {screen === 'war_room' ? (
+        <WarRoomScreen
+          dailySpec={dailySpec}
+          streak={streak}
+          bestScore={bestScore}
+          rank={rank}
+          leaderboard={leaderboard}
+          community={community}
+          aiModeLabel={aiModeLabel}
+          playerBases={playerBases}
+          hasSavedBase={myBase !== null}
+          onPlayDaily={() => startSkirmish(dailySpec)}
+          onOpenMyBase={openMyBaseBuilder}
+          onRaidPlayerBase={startPlayerRaid}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onPlayCustomSpec={(spec) => startSkirmish(spec)}
+          onCraftPrompt={handleCraftPrompt}
+        />
+      ) : (
+        <>
+          <EmpireHud
+            spec={activeSpec}
+            mode={st.mode}
+            raidTargetName={st.raidTargetOwner}
+            snapshot={snapshot}
+            selectedUnitIds={selectedUnitIds}
+            selectedBuildingId={selectedBuildingId}
+            placementKind={placementKind}
+            whisper={whisper}
+            muted={muted}
+            gameSpeed={gameSpeed}
+            publishStatus={publishStatus}
+            basePublished={publishStatus === 'published' || publishStatus === 'saved'}
+            onToggleSpeed={() => setGameSpeed((s) => (s === 1 ? 1.5 : 1))}
+            onToggleMute={toggleMute}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onPublishBase={() => void handlePublishBase()}
+            onDoneBaseBuilder={returnToHomeOverlay}
+            onAskScout={() => {
+              unlockAudio();
+              void askHybridScoutAdvisor(stateRef.current).then((w) => setWhisper(w));
+            }}
+            onSelectSquad={handleSelectSquad}
+            onSiegeEnemyKeep={() => {
+              unlockAudio();
+              cmdAttackEnemyKeep(stateRef.current, 'player');
+              flushStateSounds(stateRef.current.soundEvents);
+            }}
+            onTrainUnit={handleTrainUnit}
+            onSelectPlacement={(kind) => {
+              unlockAudio();
+              setPlacementKind(kind);
+            }}
+            onTaunt={handleTaunt}
+            onExitToWarRoom={returnToHomeOverlay}
+          />
+          <ChronicleModal
+            open={st.mode !== 'base_builder' && (st.outcome === 'victory' || st.outcome === 'defeat')}
+            state={st}
+            streak={Math.max(1, streak)}
+            rank={rank}
+            flairText={flairText}
+            epigraph={epigraph}
+            shareCode={st.spec.isCustom && st.mode !== 'raid' ? encodeSkirmishCode(st.spec) : null}
+            commentStatus={commentStatus}
+            onPostComment={() => void handlePostComment()}
+            onCopyChronicle={() => void handleCopyChronicle()}
+            onPlayAgain={() => {
+              if (st.mode === 'raid' && st.raidTargetOwner) {
+                const target = playerBases.find((b) => b.owner === st.raidTargetOwner);
+                if (target) {
+                  startPlayerRaid(target);
+                  return;
+                }
+              }
+              startSkirmish(activeSpec);
+            }}
+            onBackToWarRoom={returnToHomeOverlay}
+          />
+        </>
+      )}
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        inMatch={screen === 'game'}
         muted={muted}
+        onToggleMute={toggleMute}
         gameSpeed={gameSpeed}
         onToggleSpeed={() => setGameSpeed((s) => (s === 1 ? 1.5 : 1))}
-        onToggleMute={() => {
-          const next = !muted;
-          setMutedState(next);
-          setAudioMuted(next);
-        }}
-        onAskScout={() => {
-          unlockAudio();
-          void askHybridScoutAdvisor(stateRef.current).then((w) => setWhisper(w));
-        }}
-        onSelectSquad={handleSelectSquad}
-        onSiegeEnemyKeep={() => {
-          unlockAudio();
-          cmdAttackEnemyKeep(stateRef.current, 'player');
-          flushStateSounds(stateRef.current.soundEvents);
-        }}
-        onTrainUnit={handleTrainUnit}
-        onSelectPlacement={(kind) => {
-          unlockAudio();
-          setPlacementKind(kind);
-        }}
+        showMinimap={showMinimap}
+        onToggleMinimap={() => setShowMinimap((v) => !v)}
         onTaunt={handleTaunt}
-        onExitToWarRoom={() => setScreen('war_room')}
-      />
-      <ChronicleModal
-        open={st.outcome === 'victory' || st.outcome === 'defeat'}
-        state={st}
-        streak={Math.max(1, streak)}
+        onExitToMainMenu={returnToHomeOverlay}
+        dailySpec={dailySpec}
+        streak={streak}
+        bestScore={bestScore}
         rank={rank}
-        flairText={flairText}
-        epigraph={epigraph}
-        shareCode={st.spec.isCustom ? encodeSkirmishCode(st.spec) : null}
-        commentStatus={commentStatus}
-        onPostComment={() => void handlePostComment()}
-        onCopyChronicle={() => void handleCopyChronicle()}
-        onPlayAgain={() => startSkirmish(activeSpec)}
-        onBackToWarRoom={() => setScreen('war_room')}
+        leaderboard={leaderboard}
+        community={community}
+        aiModeLabel={aiModeLabel}
+        onPlayCustomSpec={(spec) => startSkirmish(spec)}
+        onCraftPrompt={handleCraftPrompt}
       />
     </main>
   );

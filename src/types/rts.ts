@@ -65,6 +65,7 @@ export type TileKind =
   | 'berry'
   | 'gold'
   | 'water'
+  | 'fish'
   | 'shallows'
   | 'cliff'
   | 'road';
@@ -81,6 +82,8 @@ export interface MapTile {
 export type BuildingKind =
   | 'town_center'
   | 'homestead'
+  | 'farm'
+  | 'stone_wall'
   | 'barracks'
   | 'archery_range'
   | 'stable'
@@ -272,11 +275,48 @@ export interface MatchStats {
   goldGathered: number;
   tauntsUsed: number;
   cheekyWololo: boolean;
+  horsesTamed?: number;
   countsByUnit: Partial<Record<UnitKind, number>>;
 }
 
+export interface WildHorse {
+  id: number;
+  x: number;
+  y: number;
+  team: Team | 'neutral';
+  coat: 'chestnut' | 'dapple' | 'bay';
+  facing: number;
+  animPhase: number;
+  wanderTimer: number;
+  targetX: number;
+  targetY: number;
+}
+
+export interface SavedBuildingPlacement {
+  kind: BuildingKind;
+  tileX: number;
+  tileY: number;
+}
+
+export interface PlayerBaseBlueprint {
+  owner: string;
+  empireName: string;
+  civ: CivId;
+  biome: BiomeId;
+  buildings: SavedBuildingPlacement[];
+  garrison: UnitKind[];
+  defenseWins: number;
+  raidsPlayed: number;
+  trophies: number;
+  updatedAt: string;
+}
+
+export type GameMode = 'skirmish' | 'raid' | 'base_builder';
+
 export interface GameState {
   spec: SkirmishSpec;
+  mode?: GameMode;
+  raidTargetOwner?: string;
   mapSize: number;
   tiles: MapTile[]; // length mapSize * mapSize
   fog: FogState[]; // player fog of war
@@ -287,6 +327,7 @@ export interface GameState {
   resources: Record<Team, Resources>;
   buildings: Building[];
   units: Unit[];
+  horses?: WildHorse[];
   projectiles: Projectile[];
   callouts: FloatingCallout[];
   soundEvents: SoundEventKind[];
@@ -526,6 +567,38 @@ export const BUILDINGS: Record<BuildingKind, BuildingCostSpec> = {
     attackRange: 0,
     attackCooldownSec: 0,
     description: '+5 Population AND acts as a forward drop-off camp for Wood, Food & Gold.',
+  },
+  farm: {
+    kind: 'farm',
+    name: 'Wheat Farm',
+    shortName: 'Farm',
+    hotkey: 'F',
+    size: 1,
+    cost: { wood: 35 },
+    maxHp: 140,
+    buildTimeSec: 4,
+    popProvided: 0,
+    vision: 3.2,
+    attackDamage: 0,
+    attackRange: 0,
+    attackCooldownSec: 0,
+    description: 'Traditional AoE tilled wheat plot yielding continuous Food next to your Town Center.',
+  },
+  stone_wall: {
+    kind: 'stone_wall',
+    name: 'Stone Wall',
+    shortName: 'Wall',
+    hotkey: 'Z',
+    size: 1,
+    cost: { wood: 15 },
+    maxHp: 420,
+    buildTimeSec: 2.5,
+    popProvided: 0,
+    vision: 2.8,
+    attackDamage: 0,
+    attackRange: 0,
+    attackCooldownSec: 0,
+    description: 'Thick crenelated fortification wall to protect your Keep & Gold from raiders.',
   },
   barracks: {
     kind: 'barracks',

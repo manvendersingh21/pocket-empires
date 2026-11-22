@@ -29,11 +29,16 @@ const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '/usr/bin/chromium';
 const REQUIRED_FEATURES = [
   'splash_play_cta',
   'war_room_play_daily',
+  'home_my_base_btn',
+  'home_raid_players_btn',
+  'home_settings_btn',
+  'settings_close_btn',
   'war_room_ranks_tab',
   'skirmish_forge_tab',
   'forge_prompt_input',
   'forge_craft_btn',
   'war_room_archive_play',
+  'hud_publish_base_btn',
   'hud_resource_ledger',
   'hud_scout_advisor_btn',
   'hud_taunt_btn',
@@ -331,20 +336,48 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
   try {
     await page.goto(`${baseUrl}/game.html`, { waitUntil: 'domcontentloaded' });
 
-    // 1. War Room initial state + Practice Archive of past daily sieges
+    // 1. Translucent 3-Button Home Overlay over Live Isometric Village
     await loc('war_room_play_daily').waitFor({ state: 'visible', timeout: 8000 });
-    await loc('war_room_ranks_tab').waitFor({ state: 'visible', timeout: 5000 });
-    await loc('skirmish_forge_tab').waitFor({ state: 'visible', timeout: 5000 });
-    await loc('war_room_archive_play').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('home_my_base_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('home_raid_players_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('home_settings_btn').waitFor({ state: 'visible', timeout: 5000 });
 
+    // Assert the live isometric village canvas is already rendered behind the translucent Home overlay
+    const homeCanvasRendered = await page.evaluate(() => {
+      const c = document.querySelector('main canvas');
+      return Boolean(c && c.width > 0 && c.height > 0);
+    });
+    assertCondition(
+      homeCanvasRendered,
+      `${label}: Expected live isometric village canvas rendered behind translucent Home overlay.`,
+    );
+
+    await waitAnimationFrames(page, 4);
     if (screenshotsDir) {
-      await waitAnimationFrames(page, 2);
       await page.screenshot({
         path: path.join(screenshotsDir, `${shotPrefix}-war-room.png`),
       });
     }
 
-    // 2. Skirmish Forge craft flow
+    // 2. Raid Players Sheet (Clash-of-Clans community forts)
+    await loc('home_raid_players_btn').click();
+    const raidSheet = page.locator('[data-testid="raid-target-sheet"]');
+    await raidSheet.waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('[data-testid="raid-attack-0"]').waitFor({ state: 'visible', timeout: 5000 });
+    if (screenshotsDir && !isMobile) {
+      await waitAnimationFrames(page, 2);
+      await page.screenshot({
+        path: path.join(screenshotsDir, 'desktop-raid-players.png'),
+      });
+    }
+    await loc('home_raid_players_btn').click();
+
+    // 3. Settings Drawer -> War Room Ranks & Archive -> Skirmish Forge
+    await loc('home_settings_btn').click();
+    await loc('war_room_ranks_tab').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('war_room_ranks_tab').click();
+    await loc('war_room_archive_play').waitFor({ state: 'visible', timeout: 5000 });
+
     await loc('skirmish_forge_tab').click();
     const promptInput = loc('forge_prompt_input');
     await promptInput.waitFor({ state: 'visible', timeout: 5000 });
@@ -366,14 +399,27 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       state: 'visible',
       timeout: 5000,
     });
+    await loc('settings_close_btn').click();
 
-    // Toggle back to War Room Ranks tab and launch Daily Siege
-    await loc('war_room_ranks_tab').click();
-    assertCondition(
-      (await loc('war_room_ranks_tab').getAttribute('aria-pressed')) === 'true',
-      `${label}: war_room_ranks_tab did not activate aria-pressed="true".`,
-    );
-    await loc('war_room_archive_play').waitFor({ state: 'visible', timeout: 5000 });
+    // 4. My Base Builder (Farms, Stone Walls, Publish Base)
+    await loc('home_my_base_btn').click();
+    await loc('hud_publish_base_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('[data-testid="hud-build-farm"]').waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('[data-testid="hud-build-stone_wall"]').waitFor({
+      state: 'visible',
+      timeout: 5000,
+    });
+    await loc('hud_publish_base_btn').click();
+    await waitAnimationFrames(page, 3);
+    if (screenshotsDir && !isMobile) {
+      await page.screenshot({
+        path: path.join(screenshotsDir, 'desktop-my-base.png'),
+      });
+    }
+    await page.locator('[data-testid="hud-base-done-btn"]').click();
+    await loc('war_room_play_daily').waitFor({ state: 'visible', timeout: 5000 });
+
+    // 5. Tap to Play Daily Siege
     await loc('war_room_play_daily').click();
 
     // 3. Play Daily — HUD, Onboarding Steps, Speed Toggle, Isometric Canvas & Diamond Minimap
@@ -455,16 +501,22 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       `${label}: Horizontal HUD overflow (${canvasCheck.docScrollWidth} > ${canvasCheck.docClientWidth} + 1).`,
     );
 
-    // Verify slim Royal Advisor pill does not collide with top-right minimap on any viewport
+    // Verify slim Royal Advisor pill and Scout button do not collide with top-right minimap in 2D
+    const whisperBox = await page.locator('[data-testid="hud-whisper-pill"]').boundingBox();
     const scoutBtnBox = await loc('hud_scout_advisor_btn').boundingBox();
     const miniBox = await loc('minimap_canvas').boundingBox();
     assertCondition(
-      scoutBtnBox !== null && miniBox !== null,
-      `${label}: Missing boundingBox for Scout button or Minimap canvas.`,
+      whisperBox !== null && scoutBtnBox !== null && miniBox !== null,
+      `${label}: Missing boundingBox for Whisper pill, Scout button, or Minimap canvas.`,
     );
+    const overlaps2d = (a, b) =>
+      a.x < b.x + b.width &&
+      a.x + a.width > b.x &&
+      a.y < b.y + b.height &&
+      a.y + a.height > b.y;
     assertCondition(
-      scoutBtnBox.x + scoutBtnBox.width <= miniBox.x,
-      `${label}: Royal Advisor pill overlaps Minimap (${scoutBtnBox.x + scoutBtnBox.width} > ${miniBox.x}).`,
+      !overlaps2d(whisperBox, miniBox) && !overlaps2d(scoutBtnBox, miniBox),
+      `${label}: HUD element overlaps Minimap in 2D.`,
     );
 
     // Exercise squad pills
@@ -514,10 +566,8 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
     await loc('hud_scout_advisor_btn').click();
     await waitAnimationFrames(page, 2);
     const whisperStats = await page.evaluate(() => {
-      const scoutBtn = Array.from(document.querySelectorAll('button')).find(
-        (b) => b.textContent?.trim() === 'Scout',
-      );
-      const pillText = scoutBtn?.parentElement?.querySelector('span')?.textContent?.trim() ?? '';
+      const pill = document.querySelector('[data-testid="hud-whisper-pill"]');
+      const pillText = pill?.querySelector('span')?.textContent?.trim() ?? '';
       return {
         text: pillText,
         hasRawEmoji: /\p{Extended_Pictographic}/u.test(pillText),

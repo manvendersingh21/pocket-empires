@@ -288,17 +288,17 @@ export function buildMapTiles(spec: SkirmishSpec): MapTile[] {
     }
   }
 
-  // Starting Lumber Woodline (close left-south of Player TC)
+  // Starting Lumber Woodline (close left-south & east of Player TC, keeping courtyard lanes open)
   setSymmetric(tiles, 6, 13, 'forest', 150);
   setSymmetric(tiles, 6, 14, 'forest', 150);
   setSymmetric(tiles, 7, 14, 'forest', 150);
-  setSymmetric(tiles, 12, 13, 'forest', 140);
+  setSymmetric(tiles, 13, 14, 'forest', 140);
   setSymmetric(tiles, 13, 13, 'forest', 140);
 
-  // Starting Berry Bushes (close east of Player TC for safe Food)
+  // Starting Berry Bushes (close east & south of Player TC for safe Food)
   setSymmetric(tiles, 12, 11, 'berry', 140);
   setSymmetric(tiles, 12, 12, 'berry', 140);
-  setSymmetric(tiles, 8, 14, 'berry', 140);
+  setSymmetric(tiles, 8, 15, 'berry', 140);
 
   // Starting Safe Gold Vein (close west-north of Player TC)
   setSymmetric(tiles, 7, 11, 'gold', 180);
@@ -313,6 +313,21 @@ export function buildMapTiles(spec: SkirmishSpec): MapTile[] {
     setSymmetric(tiles, 8, 8, 'gold', 220);
     setSymmetric(tiles, 3, 12, 'gold', 200);
   }
+
+  // 6. Traditional AoE Pond Fish (home shore pond + symmetric river fish banks)
+  setSymmetric(tiles, 11, 14, 'fish', 220);
+  setSymmetric(tiles, 4, 13, 'grass', 0);
+  setSymmetric(tiles, 3, 13, 'fish', 220);
+  if (tiles[13 * MAP_SIZE + 2].kind === 'water') {
+    setSymmetric(tiles, 2, 13, 'fish', 220);
+  }
+  if (tiles[9 * MAP_SIZE + 6].kind === 'water') {
+    setSymmetric(tiles, 6, 9, 'fish', 220);
+  }
+
+  // Clear symmetric meadow pastures for wild horses
+  setSymmetric(tiles, 5, 11, 'grass', 0);
+  setSymmetric(tiles, 12, 9, 'grass', 0);
 
   // Gentle dirt road connecting Player TC courtyard toward central ford
   setSymmetric(tiles, 9, 11, 'road', 0);

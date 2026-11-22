@@ -11,6 +11,7 @@ import {
   type Projectile,
   type Team,
   type Unit,
+  type WildHorse,
 } from '../types/rts.js';
 import { canPlaceBuilding } from '../engine/sim.js';
 import {
@@ -35,6 +36,8 @@ export interface IsoCanvasProps {
   onIssueTileOrder: (tileX: number, tileY: number) => void;
   onPlaceBuildingAt: (tileX: number, tileY: number) => void;
   onCancelPlacement: () => void;
+  showMinimap?: boolean;
+  interactive?: boolean;
 }
 
 interface OrderRipple {
@@ -102,6 +105,11 @@ type RenderableEntity =
       kind: 'unit';
       depth: number;
       unit: Unit;
+    }
+  | {
+      kind: 'horse';
+      depth: number;
+      horse: WildHorse;
     };
 
 // Deterministic fast hash in [0, 1) for rock-steady terrain details
@@ -251,6 +259,8 @@ function drawGroundTile(
   traceDiamond(ctx, wx, wy, 1, 0.45);
   if (kind === 'water') {
     ctx.fillStyle = (tx + ty + variant) % 2 === 0 ? biome.waterTop : biome.waterDeep;
+  } else if (kind === 'fish') {
+    ctx.fillStyle = biome.waterDeep;
   } else if (kind === 'shallows') {
     ctx.fillStyle = biome.shallows;
   } else if (kind === 'road') {
@@ -265,36 +275,103 @@ function drawGroundTile(
   ctx.fill();
 
   // 2. Painterly Tile Details
-  if (kind === 'water') {
+  if (kind === 'water' || kind === 'fish') {
     // Sunken earthen bank along NW / NE edges if bordering non-water
     const northNeighbor = ty > 0 ? tiles[(ty - 1) * mapSize + tx] : null;
     const westNeighbor = tx > 0 ? tiles[ty * mapSize + (tx - 1)] : null;
     ctx.lineWidth = 2.2;
     ctx.strokeStyle = biome.cliffSide;
-    if (northNeighbor && northNeighbor.kind !== 'water' && northNeighbor.kind !== 'shallows') {
+    if (
+      northNeighbor &&
+      northNeighbor.kind !== 'water' &&
+      northNeighbor.kind !== 'fish' &&
+      northNeighbor.kind !== 'shallows'
+    ) {
       ctx.beginPath();
       ctx.moveTo(wx, wy + 0.8);
       ctx.lineTo(wx + TILE_W / 2 - 1, wy + TILE_H / 2 + 0.8);
       ctx.stroke();
     }
-    if (westNeighbor && westNeighbor.kind !== 'water' && westNeighbor.kind !== 'shallows') {
+    if (
+      westNeighbor &&
+      westNeighbor.kind !== 'water' &&
+      westNeighbor.kind !== 'fish' &&
+      westNeighbor.kind !== 'shallows'
+    ) {
       ctx.beginPath();
       ctx.moveTo(wx, wy + 0.8);
       ctx.lineTo(wx - TILE_W / 2 + 1, wy + TILE_H / 2 + 0.8);
       ctx.stroke();
     }
 
-    // Animated water wave crests
-    const wave1 = Math.sin(animSec * 2.3 + tx * 0.9 + ty * 1.2) * 3.5;
-    const wave2 = Math.cos(animSec * 1.9 - tx * 1.1 + ty * 0.8) * 3.0;
-    ctx.strokeStyle = 'rgba(224, 242, 254, 0.36)';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(cx - 10 + wave1, cy - 3);
-    ctx.quadraticCurveTo(cx + wave1, cy - 5.2, cx + 8 + wave1, cy - 3);
-    ctx.moveTo(cx - 7 + wave2, cy + 4.5);
-    ctx.quadraticCurveTo(cx + wave2, cy + 2.5, cx + 9 + wave2, cy + 4.5);
-    ctx.stroke();
+    if (kind === 'fish') {
+      // Sparkling pond lagoon center glow
+      ctx.fillStyle = biome.waterTop;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 0.5, 20, 10, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(125, 211, 252, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(cx - 2, cy - 0.5, 13, 6.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Corner lily-pad accents
+      const pads: ReadonlyArray<readonly [number, number, number, boolean]> = [
+        [-15.5, 0.5, 3.6, true],
+        [14.5, 1.8, 3.2, false],
+        [1.5, 8.2, 2.9, variant % 2 === 0],
+      ];
+      for (let i = 0; i < pads.length; i++) {
+        const [px, py, r, hasBloom] = pads[i];
+        ctx.fillStyle = '#15803d';
+        ctx.beginPath();
+        ctx.ellipse(cx + px, cy + py, r, r * 0.52, 0, 0.25, Math.PI * 1.9);
+        ctx.lineTo(cx + px, cy + py);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#22c55e';
+        ctx.beginPath();
+        ctx.ellipse(cx + px - 0.4, cy + py - 0.2, r * 0.68, r * 0.34, 0, 0.3, Math.PI * 1.8);
+        ctx.fill();
+
+        if (hasBloom) {
+          ctx.fillStyle = '#fda4af';
+          ctx.beginPath();
+          ctx.arc(cx + px - 0.5, cy + py - 0.9, 1.15, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Animated expanding concentric white water rings
+      for (let r = 0; r < 2; r++) {
+        const ringPhase =
+          fog === 2
+            ? (animSec * 0.88 + tx * 0.41 + ty * 0.67 + r * 0.5) % 1
+            : 0.35 + r * 0.35;
+        const rx = 3.2 + ringPhase * 13.5;
+        const ry = rx * 0.5;
+        const alpha = (1 - ringPhase) * 0.58;
+        ctx.strokeStyle = `rgba(240, 249, 255, ${alpha.toFixed(2)})`;
+        ctx.lineWidth = 1.15;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + 0.5, rx, ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    } else {
+      // Animated water wave crests
+      const wave1 = Math.sin(animSec * 2.3 + tx * 0.9 + ty * 1.2) * 3.5;
+      const wave2 = Math.cos(animSec * 1.9 - tx * 1.1 + ty * 0.8) * 3.0;
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.36)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(cx - 10 + wave1, cy - 3);
+      ctx.quadraticCurveTo(cx + wave1, cy - 5.2, cx + 8 + wave1, cy - 3);
+      ctx.moveTo(cx - 7 + wave2, cy + 4.5);
+      ctx.quadraticCurveTo(cx + wave2, cy + 2.5, cx + 9 + wave2, cy + 4.5);
+      ctx.stroke();
+    }
   } else if (kind === 'shallows') {
     // White water ford ripples + stepping stones!
     const ripple = Math.sin(animSec * 3.1 + tx + ty) * 2.2;
@@ -768,6 +845,164 @@ function drawTerrainProp(
         ctx.stroke();
       }
     }
+    return;
+  }
+
+  if (kind === 'fish') {
+    // Corner cattail / reed stalks gently swaying at pond edge
+    const reedStem = veilColor('#3f6212', twilight);
+    const reedHead = veilColor('#78350f', twilight);
+    const reedClusters: ReadonlyArray<readonly [number, number]> = [
+      [-14, -5],
+      [13, -4.5],
+    ];
+    for (let r = 0; r < reedClusters.length; r++) {
+      const [rox, roy] = reedClusters[r];
+      const rxBase = cx + rox;
+      const ryBase = cy + roy;
+      const sway = twilight ? 0 : Math.sin(animSec * 2.1 + tx * 1.3 + ty + r * 1.7) * 1.2;
+
+      ctx.strokeStyle = reedStem;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(rxBase - 1.8, ryBase + 1);
+      ctx.quadraticCurveTo(rxBase - 2.4, ryBase - 4, rxBase - 2.6 + sway, ryBase - 8.5);
+      ctx.moveTo(rxBase + 1.2, ryBase + 1.5);
+      ctx.quadraticCurveTo(rxBase + 1.8, ryBase - 3.5, rxBase + 2.2 + sway, ryBase - 7.5);
+      ctx.stroke();
+
+      ctx.strokeStyle = reedHead;
+      ctx.lineWidth = 2.1;
+      ctx.beginPath();
+      ctx.moveTo(rxBase - 2.4 + sway * 0.85, ryBase - 5.2);
+      ctx.lineTo(rxBase - 2.6 + sway, ryBase - 7.6);
+      ctx.stroke();
+    }
+
+    // 1-2 silver/salmon fish leaping out of the pond in smooth parabolic arcs!
+    if (!twilight && amount > 0) {
+      const fishCount = 1 + ((tx + ty + variant) % 2);
+      for (let f = 0; f < fishCount; f++) {
+        const phase = animSec * 3.2 + tx * 1.7 + ty + f * 2.85;
+        const arcSin = Math.sin(phase);
+        const cyc = ((phase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        const dir = f === 0 ? 1 : -1;
+        const baseX0 = cx - dir * 8.5 + (f === 1 ? 2.5 : -1.5);
+        const baseX1 = cx + dir * 8.5 + (f === 1 ? 2.5 : -1.5);
+        const baseY = cy + (f === 0 ? -1.5 : 3.2);
+        const peakH = f === 0 ? 11.5 : 9.4;
+
+        if (arcSin > 0) {
+          const u = cyc / Math.PI;
+          const fx = baseX0 + (baseX1 - baseX0) * u;
+          const fy = baseY - arcSin * peakH;
+
+          // Subtle shadow on pond surface beneath leaping fish
+          ctx.fillStyle = 'rgba(12, 34, 56, 0.34)';
+          ctx.beginPath();
+          ctx.ellipse(fx, baseY + 1, 3.8, 1.6, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Launch & splashdown concentric water ring + tiny splash droplets
+          if (u < 0.24 || u > 0.76) {
+            const isLaunch = u < 0.24;
+            const splashT = isLaunch ? u / 0.24 : (1 - u) / 0.24;
+            const spX = isLaunch ? baseX0 : baseX1;
+            const spAlpha = Math.max(0, 1 - splashT);
+
+            ctx.strokeStyle = `rgba(240, 249, 255, ${(0.72 * spAlpha).toFixed(2)})`;
+            ctx.lineWidth = 1.1;
+            ctx.beginPath();
+            ctx.ellipse(
+              spX,
+              baseY,
+              2.2 + (1 - spAlpha) * 6.5,
+              1.1 + (1 - spAlpha) * 3.2,
+              0,
+              0,
+              Math.PI * 2,
+            );
+            ctx.stroke();
+
+            // Tiny white/ice-blue splash droplets fanning upward
+            ctx.fillStyle = `rgba(224, 242, 254, ${(0.9 * spAlpha).toFixed(2)})`;
+            const dropProgress = isLaunch ? u / 0.24 : (u - 0.76) / 0.24;
+            const dropLift = Math.sin(dropProgress * Math.PI) * 5.2;
+            const spread = 1.5 + dropProgress * 4.2;
+            ctx.beginPath();
+            ctx.arc(spX - spread, baseY - 1.5 - dropLift, 1.05, 0, Math.PI * 2);
+            ctx.arc(spX + spread, baseY - 1.8 - dropLift * 0.85, 0.95, 0, Math.PI * 2);
+            ctx.arc(spX + dir * 0.8, baseY - 2.8 - dropLift * 1.15, 0.85, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Orient curved trout/salmon along parabolic velocity tangent
+          const vx = (baseX1 - baseX0) / Math.PI;
+          const vy = -Math.cos(phase) * peakH;
+          const angle = Math.atan2(vy, vx);
+
+          ctx.save();
+          ctx.translate(fx, fy);
+          ctx.rotate(angle);
+          if (vx < 0) {
+            ctx.scale(1, -1);
+          }
+
+          // Forked tail fin
+          ctx.fillStyle = f === 0 ? '#7dd3fc' : '#fda4af';
+          ctx.beginPath();
+          ctx.moveTo(-3.6, 0);
+          ctx.lineTo(-6.6, -2.3);
+          ctx.lineTo(-5.4, 0);
+          ctx.lineTo(-6.6, 2.3);
+          ctx.closePath();
+          ctx.fill();
+
+          // Sleek silver belly & dorsal sheen
+          ctx.fillStyle = '#f1f5f9';
+          ctx.beginPath();
+          ctx.ellipse(0.4, 0, 4.4, 1.85, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = f === 0 ? '#38bdf8' : '#fb7185';
+          ctx.beginPath();
+          ctx.ellipse(0.5, -0.55, 4.1, 1.1, 0, Math.PI, Math.PI * 2);
+          ctx.fill();
+
+          // Tiny dorsal fin + eye
+          ctx.fillStyle = f === 0 ? '#0284c7' : '#e11d48';
+          ctx.beginPath();
+          ctx.moveTo(-0.8, -1.5);
+          ctx.lineTo(0.4, -3.1);
+          ctx.lineTo(1.5, -1.4);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.fillStyle = '#0f172a';
+          ctx.beginPath();
+          ctx.arc(2.9, -0.35, 0.65, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.restore();
+        } else if (cyc >= Math.PI && cyc < Math.PI + 1.05) {
+          // Post-splashdown expanding concentric white ripple
+          const afterT = (cyc - Math.PI) / 1.05;
+          ctx.strokeStyle = `rgba(240, 249, 255, ${(0.55 * (1 - afterT)).toFixed(2)})`;
+          ctx.lineWidth = 1.05;
+          ctx.beginPath();
+          ctx.ellipse(
+            baseX1,
+            baseY,
+            3.5 + afterT * 9.5,
+            1.75 + afterT * 4.75,
+            0,
+            0,
+            Math.PI * 2,
+          );
+          ctx.stroke();
+        }
+      }
+    }
   }
 }
 
@@ -944,9 +1179,162 @@ function drawBuildingFlames(
   }
 }
 
+function drawStoneWallSpanX(
+  ctx: CanvasRenderingContext2D,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  spanH: number,
+  stoneLeft: string,
+  stoneRight: string,
+  stoneTop: string,
+  mortarColor: string,
+  teamTrim: string,
+) {
+  // Span along +X (upper-left A -> lower-right B); thickness offset along Y
+  const ox = 6.2;
+  const oy = -3.1;
+  const aSwX = ax - ox;
+  const aSwY = ay - oy;
+  const bSwX = bx - ox;
+  const bSwY = by - oy;
+  const aNeX = ax + ox;
+  const aNeY = ay + oy;
+  const bNeX = bx + ox;
+  const bNeY = by + oy;
+
+  // Front-left SW ashlar wall face
+  ctx.fillStyle = stoneLeft;
+  ctx.beginPath();
+  ctx.moveTo(aSwX, aSwY);
+  ctx.lineTo(bSwX, bSwY);
+  ctx.lineTo(bSwX, bSwY - spanH);
+  ctx.lineTo(aSwX, aSwY - spanH);
+  ctx.closePath();
+  ctx.fill();
+
+  // SE end bevel face
+  ctx.fillStyle = stoneRight;
+  ctx.beginPath();
+  ctx.moveTo(bSwX, bSwY);
+  ctx.lineTo(bNeX, bNeY);
+  ctx.lineTo(bNeX, bNeY - spanH);
+  ctx.lineTo(bSwX, bSwY - spanH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Horizontal mortar courses & team trim band on SW face
+  ctx.strokeStyle = mortarColor;
+  ctx.lineWidth = 0.85;
+  ctx.beginPath();
+  ctx.moveTo(aSwX, aSwY - spanH * 0.45);
+  ctx.lineTo(bSwX, bSwY - spanH * 0.45);
+  ctx.stroke();
+
+  ctx.strokeStyle = teamTrim;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(aSwX, aSwY - spanH + 3.2);
+  ctx.lineTo(bSwX, bSwY - spanH + 3.2);
+  ctx.stroke();
+
+  // Sunlit stone walkway top
+  ctx.fillStyle = stoneTop;
+  ctx.beginPath();
+  ctx.moveTo(aSwX, aSwY - spanH);
+  ctx.lineTo(bSwX, bSwY - spanH);
+  ctx.lineTo(bNeX, bNeY - spanH);
+  ctx.lineTo(aNeX, aNeY - spanH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Parapet merlon along SW edge
+  const mx = (aSwX + bSwX) * 0.5;
+  const my = (aSwY + bSwY) * 0.5 - spanH;
+  drawIsoBox(ctx, mx + 1.5, my, 3.2, 1.6, 2.6, stoneLeft, stoneRight, stoneTop);
+}
+
+function drawStoneWallSpanY(
+  ctx: CanvasRenderingContext2D,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  spanH: number,
+  stoneLeft: string,
+  stoneRight: string,
+  stoneTop: string,
+  mortarColor: string,
+  teamTrim: string,
+) {
+  // Span along +Y (upper-right A -> lower-left B); thickness offset along X
+  const ox = 6.2;
+  const oy = 3.1;
+  const aSeX = ax + ox;
+  const aSeY = ay + oy;
+  const bSeX = bx + ox;
+  const bSeY = by + oy;
+  const aNwX = ax - ox;
+  const aNwY = ay - oy;
+  const bNwX = bx - ox;
+  const bNwY = by - oy;
+
+  // Front-right SE sunlit ashlar wall face
+  ctx.fillStyle = stoneRight;
+  ctx.beginPath();
+  ctx.moveTo(bSeX, bSeY);
+  ctx.lineTo(aSeX, aSeY);
+  ctx.lineTo(aSeX, aSeY - spanH);
+  ctx.lineTo(bSeX, bSeY - spanH);
+  ctx.closePath();
+  ctx.fill();
+
+  // SW end bevel face
+  ctx.fillStyle = stoneLeft;
+  ctx.beginPath();
+  ctx.moveTo(bNwX, bNwY);
+  ctx.lineTo(bSeX, bSeY);
+  ctx.lineTo(bSeX, bSeY - spanH);
+  ctx.lineTo(bNwX, bNwY - spanH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Horizontal mortar courses & team trim band on SE face
+  ctx.strokeStyle = mortarColor;
+  ctx.lineWidth = 0.85;
+  ctx.beginPath();
+  ctx.moveTo(bSeX, bSeY - spanH * 0.45);
+  ctx.lineTo(aSeX, aSeY - spanH * 0.45);
+  ctx.stroke();
+
+  ctx.strokeStyle = teamTrim;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(bSeX, bSeY - spanH + 3.2);
+  ctx.lineTo(aSeX, aSeY - spanH + 3.2);
+  ctx.stroke();
+
+  // Sunlit stone walkway top
+  ctx.fillStyle = stoneTop;
+  ctx.beginPath();
+  ctx.moveTo(aNwX, aNwY - spanH);
+  ctx.lineTo(aSeX, aSeY - spanH);
+  ctx.lineTo(bSeX, bSeY - spanH);
+  ctx.lineTo(bNwX, bNwY - spanH);
+  ctx.closePath();
+  ctx.fill();
+
+  // Parapet merlon along SE edge
+  const mx = (aSeX + bSeX) * 0.5;
+  const my = (aSeY + bSeY) * 0.5 - spanH;
+  drawIsoBox(ctx, mx - 1.5, my, 3.2, 1.6, 2.6, stoneLeft, stoneRight, stoneTop);
+}
+
 function drawBuilding(
   ctx: CanvasRenderingContext2D,
   b: Building,
+  allBuildings: Building[],
   selected: boolean,
   twilight: boolean,
   animSec: number,
@@ -1002,6 +1390,138 @@ function drawBuilding(
     ctx.stroke();
   }
 
+  // Flat ground-height isometric Wheat Farm (villagers visibly walk right onto the farm!)
+  if (b.kind === 'farm') {
+    const loamBorder = veilColor('#4a311a', twilight);
+    const tilledSoil = veilColor('#5e3e22', twilight);
+    const furrowDark = veilColor('#3b2412', twilight);
+    const furrowLight = veilColor('#7a5230', twilight);
+    const postWood = veilColor('#6b4423', twilight);
+    const postCap = veilColor('#b48246', twilight);
+
+    // Outer dark loam border diamond
+    traceDiamond(ctx, top.wx, top.wy, 1, -0.8);
+    ctx.fillStyle = loamBorder;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
+    ctx.lineWidth = 0.95;
+    ctx.stroke();
+
+    // Inner lush tilled soil diamond
+    traceDiamond(ctx, top.wx, top.wy, 1, -2.5);
+    ctx.fillStyle = tilledSoil;
+    ctx.fill();
+
+    const toFarmPt = (u: number, v: number) => ({
+      px: top.wx + (u - v) * (TILE_W / 2),
+      py: top.wy + (u + v) * (TILE_H / 2),
+    });
+
+    const prog = !b.built && ghostAlpha === 1 ? Math.max(0.12, Math.min(1, b.buildProgress)) : 1;
+
+    // 6 neat diagonal isometric plowed furrow trenches & sunlit soil ridges
+    for (let r = 0; r < 6; r++) {
+      const u = 0.16 + r * 0.136;
+      const p0 = toFarmPt(u, 0.13);
+      const p1 = toFarmPt(u, 0.87);
+
+      ctx.strokeStyle = furrowDark;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(p0.px, p0.py);
+      ctx.lineTo(p1.px, p1.py);
+      ctx.stroke();
+
+      ctx.strokeStyle = furrowLight;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(p0.px + 1.1, p0.py - 0.5);
+      ctx.lineTo(p1.px + 1.1, p1.py - 0.5);
+      ctx.stroke();
+    }
+
+    // Swaying golden Age-of-Empires wheat stalks in diagonal rows
+    const stalkColor = veilColor(prog < 0.5 ? '#84cc16' : '#d97706', twilight);
+    const headGold = veilColor(prog < 0.5 ? '#bef264' : '#fde047', twilight);
+    const headAmber = veilColor('#f59e0b', twilight);
+    const activeRows = Math.max(1, Math.round(prog * 6));
+
+    for (let r = 0; r < activeRows; r++) {
+      const u = 0.16 + r * 0.136;
+      for (let c = 0; c < 6; c++) {
+        const v = 0.16 + c * 0.136;
+        const { px, py } = toFarmPt(u, v);
+        const sway = twilight
+          ? 0
+          : Math.sin(animSec * 2.6 + (b.tileX + u) * 2.3 + (b.tileY + v) * 1.7) * 1.65;
+        const stalkH = (3.4 + ((r + c) % 2) * 0.8) * (0.45 + 0.55 * prog);
+
+        ctx.strokeStyle = stalkColor;
+        ctx.lineWidth = 1.05;
+        ctx.beginPath();
+        ctx.moveTo(px - 0.9, py + 0.4);
+        ctx.lineTo(px - 1.2 + sway, py - stalkH);
+        ctx.moveTo(px + 0.9, py + 0.4);
+        ctx.lineTo(px + 1.1 + sway, py - stalkH - 0.5);
+        ctx.stroke();
+
+        // Plump golden wheat ears
+        ctx.fillStyle = (r + c) % 2 === 0 ? headGold : headAmber;
+        ctx.beginPath();
+        ctx.ellipse(px - 1.1 + sway, py - stalkH - 0.9, 1.05, 1.9, sway * 0.12, 0, Math.PI * 2);
+        ctx.ellipse(px + 1.1 + sway, py - stalkH - 1.3, 1.0, 1.8, sway * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Tiny wooden corner posts & low rustic corner rails
+    const corners: ReadonlyArray<readonly [number, number, number, number, number, number]> = [
+      [0.07, 0.07, 0.22, 0.07, 0.07, 0.22], // North
+      [0.93, 0.07, 0.78, 0.07, 0.93, 0.22], // East
+      [0.93, 0.93, 0.78, 0.93, 0.93, 0.78], // South
+      [0.07, 0.93, 0.22, 0.93, 0.07, 0.78], // West
+    ];
+    for (let i = 0; i < corners.length; i++) {
+      const [cu, cv, r1u, r1v, r2u, r2v] = corners[i];
+      const pc = toFarmPt(cu, cv);
+      const pr1 = toFarmPt(r1u, r1v);
+      const pr2 = toFarmPt(r2u, r2v);
+
+      ctx.strokeStyle = postCap;
+      ctx.lineWidth = 1.0;
+      ctx.beginPath();
+      ctx.moveTo(pr1.px, pr1.py - 2.3);
+      ctx.lineTo(pc.px, pc.py - 2.5);
+      ctx.lineTo(pr2.px, pr2.py - 2.3);
+      ctx.stroke();
+
+      ctx.fillStyle = postWood;
+      ctx.fillRect(pc.px - 1.2, pc.py - 4.8, 2.4, 5.2);
+      ctx.fillStyle = i === 0 ? cLight : postCap;
+      ctx.fillRect(pc.px - 1.2, pc.py - 5.2, 2.4, 1.3);
+    }
+
+    if (!b.built && ghostAlpha === 1 && !twilight) {
+      const barW = 28;
+      const barY = cy - 16;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.fillRect(cx - barW / 2 - 1, barY - 1, barW + 2, 5.5);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(cx - barW / 2, barY, barW * prog, 3.5);
+    } else if (ghostAlpha === 1 && !twilight && (selected || b.hp < b.maxHp)) {
+      const hpRatio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
+      const barW = 28;
+      const barY = cy - 16;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      ctx.fillRect(cx - barW / 2 - 1, barY - 1, barW + 2, 5);
+      ctx.fillStyle = hpRatio > 0.55 ? '#22c55e' : hpRatio > 0.28 ? '#f59e0b' : '#ef4444';
+      ctx.fillRect(cx - barW / 2, barY, Math.max(0, barW * hpRatio), 3);
+    }
+
+    ctx.restore();
+    return;
+  }
+
   // Foundation shadow & courtyard pad
   traceDiamond(ctx, top.wx, top.wy, b.size, -1.5);
   ctx.fillStyle = veilColor('#6b655b', twilight);
@@ -1013,9 +1533,16 @@ function drawBuilding(
   // Unfinished construction site: rising masonry + timber scaffolding + progress bar!
   if (!b.built && ghostAlpha === 1) {
     const prog = Math.max(0.05, Math.min(1, b.buildProgress));
-    const maxH = b.kind === 'watchtower' ? 34 : b.size === 2 ? 26 : 18;
+    const maxH =
+      b.kind === 'watchtower'
+        ? 34
+        : b.kind === 'stone_wall'
+          ? 16
+          : b.size === 2
+            ? 26
+            : 18;
     const curH = 4 + maxH * prog;
-    const hw = b.size === 2 ? 36 : 20;
+    const hw = b.size === 2 ? 36 : b.kind === 'stone_wall' ? 13 : 20;
     const hh = hw * 0.5;
 
     drawIsoBox(ctx, cx, cy + 2, hw, hh, curH, stoneLeft, stoneRight, stoneTop);
@@ -1059,7 +1586,141 @@ function drawBuilding(
   }
 
   // Completed architectural sprites by BuildingKind
-  if (b.kind === 'town_center') {
+  if (b.kind === 'stone_wall') {
+    const wallLeft = veilColor('#94a3b8', twilight);
+    const wallRight = veilColor('#cbd5e1', twilight);
+    const wallTop = veilColor('#e2e8f0', twilight);
+    const plinthDark = veilColor('#64748b', twilight);
+    const mortar = veilColor('#475569', twilight);
+
+    const hasWallAt = (nx: number, ny: number): boolean => {
+      for (let i = 0; i < allBuildings.length; i++) {
+        const other = allBuildings[i];
+        if (
+          other.hp > 0 &&
+          other.team === b.team &&
+          (other.kind === 'stone_wall' || other.kind === 'watchtower') &&
+          (other.built || ghostAlpha < 1) &&
+          other.tileX === nx &&
+          other.tileY === ny
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const connNegX = hasWallAt(b.tileX - 1, b.tileY);
+    const connPosX = hasWallAt(b.tileX + 1, b.tileY);
+    const connNegY = hasWallAt(b.tileX, b.tileY - 1);
+    const connPosY = hasWallAt(b.tileX, b.tileY + 1);
+    const spanH = 15.5;
+    const baseY = cy + 1.5;
+
+    // 1. Back connecting curtain-wall half-spans (NW and NE edges)
+    if (connNegX) {
+      drawStoneWallSpanX(
+        ctx,
+        cx - TILE_W * 0.25,
+        baseY - TILE_H * 0.25,
+        cx,
+        baseY,
+        spanH,
+        wallLeft,
+        wallRight,
+        wallTop,
+        mortar,
+        cMain,
+      );
+    }
+    if (connNegY) {
+      drawStoneWallSpanY(
+        ctx,
+        cx + TILE_W * 0.25,
+        baseY - TILE_H * 0.25,
+        cx,
+        baseY,
+        spanH,
+        wallLeft,
+        wallRight,
+        wallTop,
+        mortar,
+        cMain,
+      );
+    }
+
+    // 2. Central beveled ashlar stone fortification block + team mortar trim
+    drawIsoBox(ctx, cx, baseY + 1, 12.8, 6.4, 3.8, plinthDark, wallLeft, wallTop);
+    drawIsoBox(ctx, cx, baseY, 11.2, 5.6, 18, wallLeft, wallRight, wallTop);
+
+    // Ashlar stone block mortar joints on both faces
+    ctx.strokeStyle = mortar;
+    ctx.lineWidth = 0.85;
+    ctx.beginPath();
+    ctx.moveTo(cx - 11.2, baseY - 6.5);
+    ctx.lineTo(cx, baseY - 0.9);
+    ctx.lineTo(cx + 11.2, baseY - 6.5);
+    ctx.moveTo(cx - 11.2, baseY - 12);
+    ctx.lineTo(cx, baseY - 6.4);
+    ctx.lineTo(cx + 11.2, baseY - 12);
+    ctx.moveTo(cx - 5.6, baseY - 3.7);
+    ctx.lineTo(cx - 5.6, baseY - 9.2);
+    ctx.moveTo(cx + 5.6, baseY - 3.7);
+    ctx.lineTo(cx + 5.6, baseY - 9.2);
+    ctx.stroke();
+
+    // Team heraldic mortar trim band near parapet
+    ctx.strokeStyle = cMain;
+    ctx.lineWidth = 1.9;
+    ctx.beginPath();
+    ctx.moveTo(cx - 11.2, baseY - 14.8);
+    ctx.lineTo(cx, baseY - 9.2);
+    ctx.lineTo(cx + 11.2, baseY - 14.8);
+    ctx.stroke();
+
+    // Crenelated battlement merlons around top platform
+    const merlons: ReadonlyArray<readonly [number, number]> = [
+      [0, -3.5],
+      [6.8, 0],
+      [-6.8, 0],
+      [0, 3.5],
+    ];
+    for (const [mx, my] of merlons) {
+      drawIsoBox(ctx, cx + mx, baseY - 18 + my, 3.2, 1.6, 3.0, wallLeft, wallRight, wallTop);
+    }
+
+    // 3. Front connecting curtain-wall half-spans (SE and SW edges)
+    if (connPosX) {
+      drawStoneWallSpanX(
+        ctx,
+        cx,
+        baseY,
+        cx + TILE_W * 0.25,
+        baseY + TILE_H * 0.25,
+        spanH,
+        wallLeft,
+        wallRight,
+        wallTop,
+        mortar,
+        cMain,
+      );
+    }
+    if (connPosY) {
+      drawStoneWallSpanY(
+        ctx,
+        cx,
+        baseY,
+        cx - TILE_W * 0.25,
+        baseY + TILE_H * 0.25,
+        spanH,
+        wallLeft,
+        wallRight,
+        wallTop,
+        mortar,
+        cMain,
+      );
+    }
+  } else if (b.kind === 'town_center') {
     // Paved stone courtyard lines + stockpile crates
     ctx.fillStyle = veilColor('#857d70', twilight);
     traceDiamond(ctx, top.wx, top.wy, 2, -5);
@@ -1276,7 +1937,9 @@ function drawBuilding(
           ? cy - 58
           : b.kind === 'monastery'
             ? cy - 46
-            : cy - 34;
+            : b.kind === 'stone_wall'
+              ? cy - 28
+              : cy - 34;
     const barW = b.size === 2 ? 48 : 32;
 
     if (selected || b.hp < b.maxHp) {
@@ -1784,6 +2447,168 @@ function drawUnit(
   ctx.restore();
 }
 
+function drawWildHorse(
+  ctx: CanvasRenderingContext2D,
+  h: WildHorse,
+  animSec: number,
+) {
+  const { wx, wy } = tileToWorld(h.x, h.y);
+  const distToTarget = Math.hypot(h.targetX - h.x, h.targetY - h.y);
+  const isMoving = distToTarget > 0.16;
+  const trot = isMoving ? Math.sin(h.animPhase * 1.45 + animSec * 5.2) : 0;
+  const bob = isMoving ? Math.abs(trot) * 1.4 : 0;
+  const grazeDip = isMoving ? 0 : Math.max(0, Math.sin(animSec * 1.7 + h.id * 2.3));
+  const nibble = !isMoving && grazeDip > 0.65 ? Math.sin(animSec * 9.8 + h.id) * 0.55 : 0;
+
+  let bodyColor = '#b4692e';
+  let bodyHighlight = '#cc7d3d';
+  let legColor = '#291811';
+  let maneColor = '#1c120c';
+
+  if (h.coat === 'chestnut') {
+    bodyColor = '#9a4b26';
+    bodyHighlight = '#b85d32';
+    legColor = '#6e3216';
+    maneColor = '#3b190b';
+  } else if (h.coat === 'dapple') {
+    bodyColor = '#e2e8f0';
+    bodyHighlight = '#f8fafc';
+    legColor = '#94a3b8';
+    maneColor = '#475569';
+  }
+
+  ctx.save();
+
+  // Soft subtle golden shimmer ring underneath tameable neutral horses
+  if (h.team === 'neutral') {
+    const shimmer = 0.24 + 0.14 * Math.sin(animSec * 3.1 + h.id * 1.5);
+    ctx.fillStyle = 'rgba(253, 224, 71, 0.09)';
+    ctx.beginPath();
+    ctx.ellipse(wx, wy + 0.5, 11.2, 5.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = `rgba(250, 204, 21, ${shimmer.toFixed(2)})`;
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.ellipse(wx, wy + 0.5, 10.4, 5.2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Soft elliptical ground shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.31)';
+  ctx.beginPath();
+  ctx.ellipse(wx, wy + 1, 9.6, 4.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.translate(wx, wy - bob);
+  ctx.scale(h.facing >= 0 ? 1 : -1, 1);
+
+  // Swishing tail behind rump
+  const tailSwish = Math.sin(animSec * (isMoving ? 6.4 : 2.8) + h.id * 1.9) * (isMoving ? 2.4 : 1.7);
+  ctx.strokeStyle = maneColor;
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-7.8, -9.8);
+  ctx.quadraticCurveTo(-11.4, -8.5 + tailSwish * 0.4, -10.8 + tailSwish * 0.5, -3.4);
+  ctx.stroke();
+
+  // Lively 4-leg trot when moving, calm planted stance when grazing
+  ctx.strokeStyle = legColor;
+  ctx.lineWidth = 1.85;
+  ctx.beginPath();
+  ctx.moveTo(-5.8, -6.2);
+  ctx.lineTo(-6.8 + trot * 2.7, 0);
+  ctx.moveTo(-2.4, -6.2);
+  ctx.lineTo(-1.8 - trot * 2.4, 0);
+  ctx.moveTo(3.4, -6.2);
+  ctx.lineTo(2.8 + trot * 2.4, 0);
+  ctx.moveTo(6.4, -6.2);
+  ctx.lineTo(7.3 - trot * 2.7, 0);
+  ctx.stroke();
+
+  // Sculpted horse barrel & sunlit back
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.ellipse(0, -8.8, 8.6, 4.1, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = bodyHighlight;
+  ctx.beginPath();
+  ctx.ellipse(-0.5, -10.1, 6.6, 2.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Subtle dapple spots on silver-cream coat
+  if (h.coat === 'dapple') {
+    ctx.fillStyle = '#cbd5e1';
+    ctx.beginPath();
+    ctx.arc(-4.2, -8.4, 1.2, 0, Math.PI * 2);
+    ctx.arc(-1.8, -7.2, 1.0, 0, Math.PI * 2);
+    ctx.arc(-5.4, -9.8, 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Tiny royal-blue saddle blanket on player-tamed horses (or crimson for enemy)
+  if (h.team === 'player' || h.team === 'enemy') {
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(-0.8, -12.8, 1.5, 8.0);
+
+    ctx.fillStyle = h.team === 'player' ? '#2563eb' : '#dc2626';
+    ctx.strokeStyle = '#fbbf24';
+    ctx.lineWidth = 0.95;
+    ctx.beginPath();
+    ctx.roundRect(-3.6, -12.3, 6.6, 4.6, 1.3);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Neck & head with gentle rhythmic head-dip toward the grass when grazing!
+  const neckTipX = 9.6 + grazeDip * 2.0;
+  const neckTipY = -15.4 + grazeDip * 10.6 + nibble;
+  const muzzleX = neckTipX + 2.8 - grazeDip * 0.4;
+  const muzzleY = neckTipY + 2.2 + grazeDip * 1.4;
+
+  // Dark mane crest along neck
+  ctx.strokeStyle = maneColor;
+  ctx.lineWidth = 2.3;
+  ctx.beginPath();
+  ctx.moveTo(4.6, -11.4);
+  ctx.quadraticCurveTo(
+    (4.6 + neckTipX) * 0.5 - 1.2,
+    (-11.4 + neckTipY) * 0.5 - 1.8,
+    neckTipX - 0.6,
+    neckTipY - 0.4,
+  );
+  ctx.stroke();
+
+  // Neck & head silhouette
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.moveTo(4.8, -11.2);
+  ctx.lineTo(neckTipX, neckTipY);
+  ctx.lineTo(muzzleX, muzzleY);
+  ctx.lineTo(muzzleX - 1.5, muzzleY + 1.4);
+  ctx.lineTo(7.4, -7.2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Pricked ear + eye
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.moveTo(neckTipX - 0.6, neckTipY + 0.4);
+  ctx.lineTo(neckTipX + 0.4, neckTipY - 2.3);
+  ctx.lineTo(neckTipX + 1.3, neckTipY + 0.6);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#0f172a';
+  ctx.beginPath();
+  ctx.arc(neckTipX + 0.8, neckTipY + 1.3, 0.7, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
 function drawMonkWololoBeams(
   ctx: CanvasRenderingContext2D,
   units: Unit[],
@@ -2062,7 +2887,7 @@ function drawPlacementPreview(
     rallyY: placeTy,
     attackTimer: 0,
   };
-  drawBuilding(ctx, ghostBuilding, false, false, animSec, valid ? 0.68 : 0.38);
+  drawBuilding(ctx, ghostBuilding, state.buildings, false, false, animSec, valid ? 0.68 : 0.38);
 
   if (!valid) {
     ctx.strokeStyle = '#fecaca';
@@ -2163,8 +2988,8 @@ function renderDiamondMinimap(
   mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   mctx.clearRect(0, 0, cssW, cssH);
 
-  // Dark obsidian backing
-  mctx.fillStyle = 'rgba(11, 15, 23, 0.92)';
+  // Sleek translucent obsidian backing
+  mctx.fillStyle = 'rgba(11, 16, 24, 0.62)';
   mctx.fillRect(0, 0, cssW, cssH);
 
   const mapSize = state.mapSize;
@@ -2182,9 +3007,9 @@ function renderDiamondMinimap(
     my: padY + (tx + ty) * cellHalfH,
   });
 
-  // Outer gilded diamond bevel
-  mctx.strokeStyle = 'rgba(217, 169, 78, 0.55)';
-  mctx.lineWidth = 1.2;
+  // Subtle frosted diamond bevel
+  mctx.strokeStyle = 'rgba(226, 232, 240, 0.36)';
+  mctx.lineWidth = 1.1;
   mctx.beginPath();
   mctx.moveTo(centerX, padY - 1);
   mctx.lineTo(centerX + halfW + 1, padY + totalH * 0.5);
@@ -2206,6 +3031,7 @@ function renderDiamondMinimap(
         const kind = state.tiles[idx].kind;
         let col = biome.grassTop;
         if (kind === 'water') col = '#2563eb';
+        else if (kind === 'fish') col = '#0ea5e9';
         else if (kind === 'shallows') col = '#38bdf8';
         else if (kind === 'forest') col = biome.treePrimary;
         else if (kind === 'gold') col = '#facc15';
@@ -2241,9 +3067,29 @@ function renderDiamondMinimap(
     }
     if (!seen) continue;
     const { mx, my } = toMini(b.tileX + b.size * 0.5, b.tileY + b.size * 0.5);
-    const r = b.size === 2 ? 3.0 : 2.1;
-    mctx.fillStyle = b.team === 'player' ? '#60a5fa' : '#f87171';
+    const r = b.size === 2 ? 3.0 : b.kind === 'stone_wall' ? 1.65 : 2.1;
+    if (b.kind === 'stone_wall') {
+      mctx.fillStyle = b.team === 'player' ? '#cbd5e1' : '#fca5a5';
+    } else if (b.kind === 'farm') {
+      mctx.fillStyle = b.team === 'player' ? '#fde047' : '#fdba74';
+    } else {
+      mctx.fillStyle = b.team === 'player' ? '#60a5fa' : '#f87171';
+    }
     mctx.fillRect(mx - r, my - r * 0.8, r * 2, r * 1.6);
+  }
+
+  // Wild & Tamed Horses on minimap
+  if (state.horses) {
+    for (const h of state.horses) {
+      if (h.team !== 'player') {
+        const tx = Math.max(0, Math.min(mapSize - 1, Math.floor(h.x)));
+        const ty = Math.max(0, Math.min(mapSize - 1, Math.floor(h.y)));
+        if (state.fog[ty * mapSize + tx] !== 2) continue;
+      }
+      const { mx, my } = toMini(h.x, h.y);
+      mctx.fillStyle = h.team === 'player' ? '#93c5fd' : '#fbbf24';
+      mctx.fillRect(mx - 1.1, my - 1.1, 2.2, 2.2);
+    }
   }
 
   // Units on minimap
@@ -2305,6 +3151,8 @@ export function IsoCanvas({
   onIssueTileOrder,
   onPlaceBuildingAt,
   onCancelPlacement,
+  showMinimap = true,
+  interactive = true,
 }: IsoCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -2323,6 +3171,10 @@ export function IsoCanvas({
   selectedBuildingIdRef.current = selectedBuildingId;
   const placementKindRef = useRef(placementKind);
   placementKindRef.current = placementKind;
+  const showMinimapRef = useRef(showMinimap);
+  showMinimapRef.current = showMinimap;
+  const interactiveRef = useRef(interactive);
+  interactiveRef.current = interactive;
 
   const callbacksRef = useRef({
     onSelectUnits,
@@ -2440,7 +3292,14 @@ export function IsoCanvas({
 
   // Keyboard shortcuts for smooth arrow-key camera pan & Escape cancel/deselect
   useEffect(() => {
+    if (!interactive) {
+      spacePressedRef.current = false;
+      arrowKeysRef.current = { up: false, down: false, left: false, right: false };
+      return;
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!interactiveRef.current) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
@@ -2477,12 +3336,15 @@ export function IsoCanvas({
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, []);
+  }, [interactive]);
 
   // Desktop + Mobile Unified Pointer & Wheel RTS Input Controller
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !interactive) {
+      selectionBoxRef.current = null;
+      return;
+    }
 
     const activePointers = new Map<number, { x: number; y: number; pointerType: string }>();
     let pinchLastDist = 0;
@@ -2576,9 +3438,17 @@ export function IsoCanvas({
           w,
           h,
         );
-        const roofH = (b.kind === 'watchtower' ? 42 : b.size === 2 ? 44 : 28) * cam.zoom;
-        const halfBoxW = (b.size === 2 ? 44 : 24) * cam.zoom;
+        const roofH =
+          (b.kind === 'watchtower'
+            ? 42
+            : b.size === 2
+              ? 44
+              : b.kind === 'stone_wall'
+                ? 22
+                : 28) * cam.zoom;
+        const halfBoxW = (b.size === 2 ? 44 : b.kind === 'stone_wall' ? 20 : 24) * cam.zoom;
         const inRoofSprite =
+          b.kind !== 'farm' &&
           Math.abs(sx - centerScreen.sx) <= halfBoxW &&
           sy >= centerScreen.sy - roofH &&
           sy <= centerScreen.sy + 14 * cam.zoom;
@@ -2955,7 +3825,7 @@ export function IsoCanvas({
       canvas.removeEventListener('pointercancel', onPointerCancel);
       canvas.removeEventListener('contextmenu', onContextMenu);
     };
-  }, [computeSnappedPlacement, ensureCamera, spawnRipple, stateRef]);
+  }, [computeSnappedPlacement, ensureCamera, interactive, spawnRipple, stateRef]);
 
   // Interactive Diamond Minimap pointer panning
   const panCameraFromMinimapEvent = useCallback(
@@ -3114,7 +3984,7 @@ export function IsoCanvas({
       }
       drawFogEdgeFeather(ctx, state.fog, state.mapSize);
 
-      // 4. Collect & Depth-Sort 3D Props, Buildings, and Visible Units (tileX + tileY)
+      // 4. Collect & Depth-Sort 3D Props, Buildings, Wild Horses, and Visible Units (tileX + tileY)
       renderList.length = 0;
 
       for (let ty = 0; ty < state.mapSize; ty++) {
@@ -3127,11 +3997,12 @@ export function IsoCanvas({
             tile.kind === 'forest' ||
             tile.kind === 'cliff' ||
             tile.kind === 'gold' ||
-            tile.kind === 'berry'
+            tile.kind === 'berry' ||
+            tile.kind === 'fish'
           ) {
             renderList.push({
               kind: 'prop',
-              depth: tx + ty + 0.98,
+              depth: tile.kind === 'fish' ? tx + ty + 0.65 : tx + ty + 0.98,
               tile,
               twilight: fog === 1,
             });
@@ -3153,10 +4024,25 @@ export function IsoCanvas({
         if (maxFog === 0) continue;
         renderList.push({
           kind: 'building',
-          depth: b.tileX + b.tileY + b.size,
+          depth: b.kind === 'farm' ? -100 + b.tileX + b.tileY : b.tileX + b.tileY + b.size,
           building: b,
           twilight: maxFog === 1,
         });
+      }
+
+      if (state.horses) {
+        for (const h of state.horses) {
+          if (h.team !== 'player') {
+            const htx = Math.max(0, Math.min(state.mapSize - 1, Math.floor(h.x)));
+            const hty = Math.max(0, Math.min(state.mapSize - 1, Math.floor(h.y)));
+            if (state.fog[hty * state.mapSize + htx] !== 2) continue;
+          }
+          renderList.push({
+            kind: 'horse',
+            depth: h.x + h.y,
+            horse: h,
+          });
+        }
       }
 
       // Track units currently targeted by Monk conversion
@@ -3194,10 +4080,13 @@ export function IsoCanvas({
           drawBuilding(
             ctx,
             item.building,
+            state.buildings,
             item.building.id === selBldId,
             item.twilight,
             animSec,
           );
+        } else if (item.kind === 'horse') {
+          drawWildHorse(ctx, item.horse, animSec);
         } else {
           drawUnit(
             ctx,
@@ -3218,7 +4107,7 @@ export function IsoCanvas({
         drawGhostBreachBeacon(ctx, state.ghostBreach, animSec);
       }
 
-      if (placementKindRef.current !== null) {
+      if (interactiveRef.current && placementKindRef.current !== null) {
         const rawHover =
           hoverTileRef.current ?? screenToTile(w * 0.5, h * 0.46, cam, w, h);
         const { tx, ty } = computeSnappedPlacement(
@@ -3247,7 +4136,7 @@ export function IsoCanvas({
       }
 
       // 7. Interactive Diamond Minimap Sync
-      if (minimapRef.current) {
+      if (interactiveRef.current && showMinimapRef.current && minimapRef.current) {
         renderDiamondMinimap(minimapRef.current, state, cam, w, h, dpr);
       }
 
@@ -3271,7 +4160,7 @@ export function IsoCanvas({
     );
   }, [ensureCamera, ghostBanner, stateRef]);
 
-  const miniW = isCompactViewport ? 116 : 140;
+  const miniW = isCompactViewport ? 114 : 138;
   const miniH = isCompactViewport ? 74 : 88;
 
   return (
@@ -3282,10 +4171,11 @@ export function IsoCanvas({
         width: '100%',
         height: '100%',
         overflow: 'hidden',
-        touchAction: 'none',
+        touchAction: interactive ? 'none' : 'auto',
+        pointerEvents: interactive ? 'auto' : 'none',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        cursor: placementKind ? 'crosshair' : 'default',
+        cursor: !interactive ? 'default' : placementKind ? 'crosshair' : 'default',
       }}
     >
       <canvas
@@ -3294,12 +4184,12 @@ export function IsoCanvas({
           display: 'block',
           width: '100%',
           height: '100%',
-          touchAction: 'none',
+          touchAction: interactive ? 'none' : 'auto',
         }}
       />
 
       {/* Rival Ghost Breach Banner */}
-      {ghostBanner && (
+      {interactive && ghostBanner && (
         <button
           type="button"
           onClick={handleFocusGhostBreach}
@@ -3334,109 +4224,117 @@ export function IsoCanvas({
         </button>
       )}
 
-      {/* Interactive Diamond Minimap + Camera Controls (top: 54px, right: 10px) */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 54,
-          right: 10,
-          zIndex: 12,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-end',
-          gap: 5,
-          pointerEvents: 'auto',
-        }}
-      >
+      {/* Sleek Translucent Frosted-Glass Diamond Minimap + Camera Controls (top: 52px, right: 10px) */}
+      {interactive && (
         <div
           style={{
-            padding: 2,
-            borderRadius: 8,
-            background: 'linear-gradient(180deg, #3b2a18 0%, #1c140c 100%)',
-            border: '1.5px solid rgba(217, 169, 78, 0.72)',
-            boxShadow: '0 6px 18px rgba(0, 0, 0, 0.55)',
-          }}
-        >
-          <canvas
-            ref={minimapRef}
-            onPointerDown={(e) => {
-              try {
-                e.currentTarget.setPointerCapture(e.pointerId);
-              } catch {
-                // Ignore synthetic pointer events
-              }
-              panCameraFromMinimapEvent(e);
-            }}
-            onPointerMove={(e) => {
-              if (e.buttons !== 0) {
-                panCameraFromMinimapEvent(e);
-              }
-            }}
-            style={{
-              display: 'block',
-              width: miniW,
-              height: miniH,
-              borderRadius: 5,
-              cursor: 'pointer',
-              touchAction: 'none',
-            }}
-          />
-        </div>
-
-        <div
-          style={{
+            position: 'absolute',
+            top: 52,
+            right: 10,
+            zIndex: 12,
             display: 'flex',
-            gap: 4,
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 6,
+            pointerEvents: 'auto',
           }}
         >
-          {[
-            {
-              label: '+',
-              title: 'Zoom In',
-              onClick: () => handleZoomStep(1.22),
-            },
-            {
-              label: '−',
-              title: 'Zoom Out',
-              onClick: () => handleZoomStep(1 / 1.22),
-            },
-            {
-              label: '⌂',
-              title: 'Center on Base (Home)',
-              onClick: handleResetHome,
-            },
-          ].map((btn) => (
-            <button
-              key={btn.label}
-              type="button"
-              title={btn.title}
-              aria-label={btn.title}
-              onClick={(e) => {
-                e.stopPropagation();
-                btn.onClick();
-              }}
+          {showMinimap && (
+            <div
               style={{
-                width: isCompactViewport ? 30 : 32,
-                height: isCompactViewport ? 26 : 28,
-                borderRadius: 6,
-                border: '1px solid rgba(217, 169, 78, 0.6)',
-                background: 'rgba(22, 18, 13, 0.9)',
-                color: '#fef3c7',
-                fontSize: 14,
-                fontWeight: 800,
-                lineHeight: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.45)',
+                padding: 3,
+                borderRadius: 12,
+                background: 'rgba(15, 20, 28, 0.42)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+                boxShadow: '0 8px 22px rgba(0, 0, 0, 0.32)',
               }}
             >
-              {btn.label}
-            </button>
-          ))}
+              <canvas
+                ref={minimapRef}
+                onPointerDown={(e) => {
+                  try {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  } catch {
+                    // Ignore synthetic pointer events
+                  }
+                  panCameraFromMinimapEvent(e);
+                }}
+                onPointerMove={(e) => {
+                  if (e.buttons !== 0) {
+                    panCameraFromMinimapEvent(e);
+                  }
+                }}
+                style={{
+                  display: 'block',
+                  width: miniW,
+                  height: miniH,
+                  borderRadius: 9,
+                  cursor: 'pointer',
+                  touchAction: 'none',
+                }}
+              />
+            </div>
+          )}
+
+          <div
+            style={{
+              display: 'flex',
+              gap: 5,
+            }}
+          >
+            {[
+              {
+                label: '+',
+                title: 'Zoom In',
+                onClick: () => handleZoomStep(1.22),
+              },
+              {
+                label: '−',
+                title: 'Zoom Out',
+                onClick: () => handleZoomStep(1 / 1.22),
+              },
+              {
+                label: '⌂',
+                title: 'Center on Base (Home)',
+                onClick: handleResetHome,
+              },
+            ].map((btn) => (
+              <button
+                key={btn.label}
+                type="button"
+                title={btn.title}
+                aria-label={btn.title}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  btn.onClick();
+                }}
+                style={{
+                  width: isCompactViewport ? 30 : 32,
+                  height: isCompactViewport ? 26 : 28,
+                  borderRadius: 12,
+                  border: '1px solid rgba(255, 255, 255, 0.18)',
+                  background: 'rgba(15, 20, 28, 0.42)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  color: '#f8fafc',
+                  fontSize: 14,
+                  fontWeight: 800,
+                  lineHeight: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.28)',
+                }}
+              >
+                {btn.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
