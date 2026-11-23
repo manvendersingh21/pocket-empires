@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   BUILDINGS,
+  CASTLE_AGE_COST,
   TAUNTS,
   UNITS,
   type BuildingKind,
@@ -33,6 +34,9 @@ export interface HudSnapshot {
   monkCount: number;
   ownedBuildings: Partial<Record<BuildingKind, number>>;
   unitQueues: Partial<Record<UnitKind, number>>;
+  playerAge?: 1 | 2;
+  raidDestructionPct?: number;
+  tamedHorses?: number;
 }
 
 export interface EmpireHudProps {
@@ -60,15 +64,25 @@ export interface EmpireHudProps {
   onDoneBaseBuilder?: () => void;
   publishStatus?: 'idle' | 'publishing' | 'published' | 'saved';
   basePublished?: boolean;
+  onAdvanceAge?: () => void;
+  demolishMode?: boolean;
+  onToggleDemolish?: () => void;
+  empireName?: string;
+  onChangeEmpireName?: (name: string) => void;
 }
 
-const TRAINABLE_UNITS: ReadonlyArray<{ kind: UnitKind; icon: EmpireIconName }> = [
-  { kind: 'villager', icon: 'villager' },
-  { kind: 'militia', icon: 'swords' },
-  { kind: 'pikeman', icon: 'pikeman' },
-  { kind: 'archer', icon: 'archer' },
-  { kind: 'knight', icon: 'knight' },
-  { kind: 'monk', icon: 'monk' },
+type TrainCardVisual =
+  | { type: 'empire'; icon: EmpireIconName }
+  | { type: 'trebuchet' };
+
+const TRAINABLE_UNITS: ReadonlyArray<{ kind: UnitKind; visual: TrainCardVisual }> = [
+  { kind: 'villager', visual: { type: 'empire', icon: 'villager' } },
+  { kind: 'militia', visual: { type: 'empire', icon: 'swords' } },
+  { kind: 'pikeman', visual: { type: 'empire', icon: 'pikeman' } },
+  { kind: 'archer', visual: { type: 'empire', icon: 'archer' } },
+  { kind: 'knight', visual: { type: 'empire', icon: 'knight' } },
+  { kind: 'monk', visual: { type: 'empire', icon: 'monk' } },
+  { kind: 'trebuchet', visual: { type: 'trebuchet' } },
 ];
 
 type BuildCardVisual =
@@ -221,6 +235,149 @@ function PublishSvg({ size = 13 }: { size?: number }) {
   );
 }
 
+function TrebuchetSvg({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      style={{ flexShrink: 0, filter: 'drop-shadow(0 1px 1.5px rgba(0,0,0,0.55))' }}
+    >
+      {/* Heavy oak base sill */}
+      <rect
+        x="2.6"
+        y="18.6"
+        width="18.8"
+        height="2.4"
+        rx="0.8"
+        fill="#78350f"
+        stroke="#140f0a"
+        strokeWidth="1.2"
+      />
+      {/* Diagonal throwing arm */}
+      <line
+        x1="4.5"
+        y1="6.4"
+        x2="19.6"
+        y2="14.2"
+        stroke="#140f0a"
+        strokeWidth="3.2"
+        strokeLinecap="round"
+      />
+      <line
+        x1="4.5"
+        y1="6.4"
+        x2="19.6"
+        y2="14.2"
+        stroke="#fbbf24"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      {/* Sling & boulder */}
+      <path d="M4.5 6.4L2.8 11.4" stroke="#e2e8f0" strokeWidth="1.1" strokeLinecap="round" />
+      <circle cx="2.9" cy="12.6" r="2.1" fill="#cbd5e1" stroke="#140f0a" strokeWidth="1.1" />
+      {/* Counterweight chest */}
+      <path
+        d="M17.2 13.8H21.2L20.6 18H17.8L17.2 13.8Z"
+        fill="#d97706"
+        stroke="#140f0a"
+        strokeWidth="1.15"
+        strokeLinejoin="round"
+      />
+      {/* A-frame timber trestle & brass axle */}
+      <path
+        d="M7.2 18.8L12.2 8.8L16.4 18.8"
+        stroke="#b45309"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12.2" cy="9.9" r="1.6" fill="#fde047" stroke="#140f0a" strokeWidth="1" />
+    </svg>
+  );
+}
+
+function CastleAgeSvg({ size = 13, unlocked = false }: { size?: number; unlocked?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      style={{ flexShrink: 0, filter: 'drop-shadow(0 1px 1.5px rgba(0,0,0,0.5))' }}
+    >
+      {/* Imperial Castle Keep */}
+      <path
+        d="M4.2 20.5V10.5H6.8V12.2H9.4V10.5H14.6V12.2H17.2V10.5H19.8V20.5H4.2Z"
+        fill={unlocked ? '#f5b942' : '#cbd5e1'}
+        stroke="#140f0a"
+        strokeWidth="1.35"
+        strokeLinejoin="round"
+      />
+      {/* Royal Crown Spire */}
+      <path
+        d="M6.6 8.8L5.8 3.8L9.6 6.4L12 2.6L14.4 6.4L18.2 3.8L17.4 8.8H6.6Z"
+        fill="#fde047"
+        stroke="#140f0a"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10 20.5V15.8C10 14.6 10.9 13.8 12 13.8C13.1 13.8 14 14.6 14 15.8V20.5"
+        fill="#1e293b"
+        stroke="#fde68a"
+        strokeWidth="0.9"
+      />
+    </svg>
+  );
+}
+
+function DemolishSvg({ size = 12, active = false }: { size?: number; active?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      style={{ flexShrink: 0 }}
+    >
+      {/* Oak handle */}
+      <line
+        x1="5"
+        y1="19.5"
+        x2="15.2"
+        y2="9.3"
+        stroke="#fbbf24"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+      {/* Heavy iron maul head */}
+      <rect
+        x="11.8"
+        y="4.2"
+        width="8.2"
+        height="5"
+        rx="1.1"
+        transform="rotate(45 15.9 6.7)"
+        fill={active ? '#fca5a5' : '#e2e8f0'}
+        stroke="#140f0a"
+        strokeWidth="1.3"
+      />
+      {/* Impact sparks */}
+      <path
+        d="M18.5 14.5L21 15.5M16.5 17.5L18.2 20"
+        stroke={active ? '#fde047' : '#f87171'}
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 const HUD_CSS = `
 @keyframes pe-idle-amber-pulse {
   0%, 100% {
@@ -230,6 +387,16 @@ const HUD_CSS = `
   50% {
     box-shadow: 0 0 10px 1px rgba(245, 166, 35, 0.35);
     border-color: #fde047;
+  }
+}
+@keyframes pe-castle-age-glow {
+  0%, 100% {
+    box-shadow: 0 4px 14px rgba(245, 168, 36, 0.32), inset 0 1px 0 rgba(255, 252, 232, 0.45);
+    border-color: rgba(254, 240, 138, 0.75);
+  }
+  50% {
+    box-shadow: 0 0 18px 2px rgba(245, 168, 36, 0.52), inset 0 1px 0 rgba(255, 252, 232, 0.7);
+    border-color: #fef08a;
   }
 }
 .pe-hud-root {
@@ -460,22 +627,178 @@ const HUD_CSS = `
 .pe-whisper-pill {
   pointer-events: auto;
   margin: 5px 0 0 8px;
-  max-width: min(330px, calc(100vw - 156px));
+  max-width: min(330px, calc(100vw - 162px));
   width: fit-content;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 4px 9px;
   border-radius: 999px;
-  background: rgba(14, 18, 26, 0.44);
+  background: rgba(14, 18, 26, 0.42);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(248, 250, 252, 0.94);
   font-size: 10.5px;
   font-weight: 600;
   line-height: 1.25;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+}
+.pe-top-left-subrow {
+  pointer-events: none;
+  margin: 5px 0 0 8px;
+  max-width: min(330px, calc(100vw - 162px));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.pe-age-up-pill {
+  pointer-events: auto;
+  cursor: pointer;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(20, 22, 28, 0.46);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(251, 191, 36, 0.42);
+  color: #fef3c7;
+  font-size: 10.5px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition: transform 0.08s ease, filter 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.pe-age-up-pill:hover {
+  border-color: rgba(254, 240, 138, 0.72);
+  background: rgba(34, 30, 24, 0.58);
+}
+.pe-age-up-pill:active {
+  transform: scale(0.97);
+}
+.pe-age-up-pill-ready {
+  background: linear-gradient(
+    135deg,
+    rgba(245, 168, 36, 0.62) 0%,
+    rgba(217, 119, 6, 0.52) 100%
+  );
+  border-color: rgba(254, 240, 138, 0.78);
+  color: #fffbeb;
+  text-shadow: 0 1px 2px rgba(20, 12, 4, 0.65);
+  animation: pe-castle-age-glow 1.8s infinite ease-in-out;
+}
+.pe-age-crest-badge {
+  pointer-events: auto;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: linear-gradient(
+    135deg,
+    rgba(245, 168, 36, 0.36) 0%,
+    rgba(30, 58, 138, 0.48) 100%
+  );
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(254, 240, 138, 0.7);
+  color: #fef3c7;
+  font-size: 10.5px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(254, 240, 138, 0.28);
+}
+.pe-horse-buff-badge {
+  pointer-events: auto;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(24, 28, 36, 0.44);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(251, 191, 36, 0.38);
+  color: #fde68a;
+  font-size: 10px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 3.5px;
+  white-space: nowrap;
+}
+.pe-empire-name-pill {
+  pointer-events: auto;
+  margin: 5px 0 0 8px;
+  max-width: min(240px, calc(100vw - 162px));
+  height: 27px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(14, 20, 30, 0.46);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(254, 240, 138, 0.38);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.pe-empire-name-pill:focus-within {
+  background: rgba(16, 24, 36, 0.62);
+  border-color: rgba(254, 240, 138, 0.78);
+}
+.pe-empire-name-input {
+  width: 148px;
+  max-width: 100%;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #fef3c7;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  user-select: text;
+}
+.pe-empire-name-input::placeholder {
+  color: rgba(226, 232, 240, 0.62);
+  font-weight: 600;
+}
+.pe-raid-destruction-pill {
+  pointer-events: auto;
+  margin: 5px 0 0 8px;
+  max-width: min(330px, calc(100vw - 162px));
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+    135deg,
+    rgba(153, 27, 27, 0.56) 0%,
+    rgba(120, 53, 15, 0.50) 100%
+  );
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(254, 240, 138, 0.55);
+  color: #fef3c7;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1.2;
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(254, 240, 138, 0.24);
 }
 .pe-dock-floating {
   pointer-events: auto;
@@ -484,22 +807,36 @@ const HUD_CSS = `
   margin: 0 auto calc(8px + env(safe-area-inset-bottom, 0px));
   padding: 6px 8px;
   border-radius: 18px;
-  background: rgba(14, 18, 26, 0.46);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(14, 18, 26, 0.44);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   box-shadow:
-    0 10px 30px rgba(0, 0, 0, 0.36),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    0 10px 30px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
-.pe-dock-micro-row {
+.pe-dock-top-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 5px;
+  gap: 6px;
+}
+.pe-dock-mode-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+@media (max-width: 420px) {
+  .pe-dock-top-row {
+    flex-wrap: wrap;
+    row-gap: 5px;
+    column-gap: 6px;
+  }
 }
 .pe-squad-strip {
   display: flex;
@@ -546,6 +883,16 @@ const HUD_CSS = `
   background: rgba(220, 38, 38, 0.55);
   border-color: rgba(252, 165, 165, 0.6);
   color: #fef2f2;
+}
+.pe-micro-pill-demolish-active {
+  background: linear-gradient(
+    135deg,
+    rgba(220, 38, 38, 0.58) 0%,
+    rgba(180, 83, 9, 0.52) 100%
+  );
+  border-color: rgba(254, 240, 138, 0.72);
+  color: #fffbeb;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.35);
 }
 .pe-mode-switch {
   display: inline-flex;
@@ -710,6 +1057,11 @@ export function EmpireHud({
   onDoneBaseBuilder,
   publishStatus = 'idle',
   basePublished = false,
+  onAdvanceAge,
+  demolishMode = false,
+  onToggleDemolish,
+  empireName,
+  onChangeEmpireName,
 }: EmpireHudProps) {
   const [preferredDockMode, setPreferredDockMode] = useState<'train' | 'build'>(
     mode === 'base_builder' ? 'build' : 'train',
@@ -717,14 +1069,25 @@ export function EmpireHud({
   const [lastMode, setLastMode] = useState<GameMode>(mode);
   const [tauntOpen, setTauntOpen] = useState(false);
   const [fallbackSettingsOpen, setFallbackSettingsOpen] = useState(false);
+  const [localEmpireName, setLocalEmpireName] = useState(spec.mapName || '');
+  const [lastBuilderMapName, setLastBuilderMapName] = useState(spec.mapName || '');
 
   if (mode !== lastMode) {
     setLastMode(mode);
     setPreferredDockMode(mode === 'base_builder' ? 'build' : 'train');
   }
 
+  if (spec.mapName !== lastBuilderMapName) {
+    setLastBuilderMapName(spec.mapName || '');
+    setLocalEmpireName(spec.mapName || '');
+  }
+
+  const resolvedEmpireName = empireName !== undefined ? empireName : localEmpireName;
   const dockMode: 'train' | 'build' = placementKind !== null ? 'build' : preferredDockMode;
   const isBaseBuilder = mode === 'base_builder';
+  const playerAge: 1 | 2 = snapshot.playerAge ?? 1;
+  const canAffordCastleAge = canAfford(snapshot.resources, CASTLE_AGE_COST);
+  const tamedHorsesCount = snapshot.tamedHorses ?? 0;
 
   const done1 = snapshot.idleVillagerCount === 0;
   const done2 =
@@ -1049,8 +1412,103 @@ export function EmpireHud({
           </div>
         </div>
 
-        {/* Slim Top-Left Whisper / Mode / Onboarding Micro-Pills (strictly clear of right minimap) */}
+        {/* Slim Top-Left Citadel Name / Raid % / Castle Age / Whisper / Onboarding Micro-Pills */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+          {isBaseBuilder && (
+            <label
+              className="pe-empire-name-pill"
+              title="Name Your Citadel before publishing to the community"
+            >
+              <EmpireIcon name="quill" size={12} />
+              <input
+                type="text"
+                data-testid="hud-empire-name-input"
+                aria-label="Empire Name"
+                className="pe-empire-name-input"
+                maxLength={24}
+                placeholder="Name Your Citadel…"
+                value={resolvedEmpireName}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                onChange={(e) => {
+                  const nextVal = e.target.value.slice(0, 24);
+                  setLocalEmpireName(nextVal);
+                  onChangeEmpireName?.(nextVal);
+                }}
+              />
+            </label>
+          )}
+
+          {mode === 'raid' && (
+            <div
+              data-testid="hud-raid-destruction-pill"
+              className="pe-raid-destruction-pill pe-hud-tabular"
+            >
+              <EmpireIcon name="flame" size={12} />
+              <span>
+                {`Raid vs u/${stripEmoji(raidTargetName || 'Defender')} · ${Math.round(
+                  snapshot.raidDestructionPct ?? 0,
+                )}% Destroyed`}
+              </span>
+            </div>
+          )}
+
+          <div className="pe-top-left-subrow">
+            {playerAge === 1 ? (
+              <button
+                type="button"
+                data-testid="hud-age-up-btn"
+                aria-disabled={!canAffordCastleAge}
+                className={`pe-age-up-pill pe-hud-tabular ${
+                  canAffordCastleAge ? 'pe-age-up-pill-ready' : ''
+                }`}
+                title="Advance to Castle Age (+15% unit HP & attack, unlocks Counterweight Trebuchets)"
+                onClick={() => onAdvanceAge?.()}
+              >
+                <CastleAgeSvg size={13} unlocked={false} />
+                <span>Castle Age · </span>
+                <span
+                  style={{
+                    color:
+                      snapshot.resources.food >= CASTLE_AGE_COST.food ? '#fde68a' : '#fca5a5',
+                  }}
+                >
+                  {CASTLE_AGE_COST.food}F
+                </span>
+                <span> </span>
+                <span
+                  style={{
+                    color:
+                      snapshot.resources.gold >= CASTLE_AGE_COST.gold ? '#fde68a' : '#fca5a5',
+                  }}
+                >
+                  {CASTLE_AGE_COST.gold}G
+                </span>
+              </button>
+            ) : (
+              <div
+                data-testid="hud-age-up-btn"
+                className="pe-age-crest-badge pe-hud-tabular"
+                title="Castle Age II — +15% Unit Might & Counterweight Trebuchets Unlocked"
+              >
+                <CastleAgeSvg size={13} unlocked />
+                <span>Castle Age II</span>
+              </div>
+            )}
+
+            {tamedHorsesCount > 0 && (
+              <div
+                className="pe-horse-buff-badge pe-hud-tabular"
+                title={`Tamed ${tamedHorsesCount} wild horse${tamedHorsesCount === 1 ? '' : 's'} — Cavalry speed boosted`}
+              >
+                <EmpireIcon name="horse" size={11} />
+                <span>+{Math.min(15, tamedHorsesCount * 5)}% Cav</span>
+              </div>
+            )}
+          </div>
+
           {whisper && (
             <div data-testid="hud-whisper-pill" className="pe-whisper-pill">
               <EmpireIcon name={whisperIconName} size={12} />
@@ -1067,13 +1525,6 @@ export function EmpireHud({
             </div>
           )}
 
-          {mode === 'raid' && raidTargetName && !whisper && (
-            <div className="pe-whisper-pill">
-              <EmpireIcon name="swords" size={12} />
-              <span>Raiding u/{stripEmoji(raidTargetName)}</span>
-            </div>
-          )}
-
           {showOnboarding && (
             <div data-testid="hud-onboarding-steps" className="pe-whisper-pill">
               <EmpireIcon name={!done1 ? 'villager' : !done2 ? 'barracks' : 'swords'} size={11} />
@@ -1086,7 +1537,7 @@ export function EmpireHud({
       {/* BOTTOM-CENTER FLOATING GLASS PILL DOCK */}
       <footer data-testid="hud-bottom-dock" className="pe-dock-floating">
         {/* Slim Top Row of Micro-Pills */}
-        <div className="pe-dock-micro-row">
+        <div className="pe-dock-top-row">
           <div className="pe-squad-strip">
             <button
               type="button"
@@ -1132,7 +1583,28 @@ export function EmpireHud({
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+          <div className="pe-dock-mode-cluster">
+            {isBaseBuilder && (
+              <button
+                type="button"
+                data-testid="hud-demolish-btn"
+                aria-pressed={Boolean(demolishMode)}
+                className={`pe-micro-pill ${
+                  demolishMode ? 'pe-micro-pill-demolish-active' : ''
+                }`}
+                title="Tap any placed wall, farm, or building to clear & refund 75% resources"
+                onClick={() => {
+                  if (!demolishMode && placementKind !== null) {
+                    onSelectPlacement(null);
+                  }
+                  onToggleDemolish?.();
+                }}
+              >
+                <DemolishSvg size={12} active={Boolean(demolishMode)} />
+                <span>{demolishMode ? 'Demolish · 75%' : 'Demolish'}</span>
+              </button>
+            )}
+
             {placementKind !== null && (
               <button
                 type="button"
@@ -1156,6 +1628,7 @@ export function EmpireHud({
                 className={`pe-mode-btn ${dockMode === 'train' ? 'pe-mode-btn-active' : ''}`}
                 onClick={() => {
                   if (placementKind !== null) onSelectPlacement(null);
+                  if (demolishMode) onToggleDemolish?.();
                   setPreferredDockMode('train');
                 }}
               >
@@ -1178,14 +1651,20 @@ export function EmpireHud({
         {/* Compact Icon-Forward Horizontal Row (Train OR Build) */}
         {dockMode === 'train' ? (
           <div className="pe-cards-row">
-            {TRAINABLE_UNITS.map(({ kind, icon }) => {
+            {TRAINABLE_UNITS.map(({ kind, visual }) => {
               const unitSpec = UNITS[kind];
               const reqBuilding = unitSpec.trainedAt;
-              const hasPrereq = (snapshot.ownedBuildings[reqBuilding] ?? 0) > 0;
+              const hasBuilding = (snapshot.ownedBuildings[reqBuilding] ?? 0) > 0;
+              const requiresAge2 = Boolean(unitSpec.requiresCastleAge);
+              const hasPrereq = (!requiresAge2 || playerAge >= 2) && hasBuilding;
               const cost = getEffectiveUnitCost(spec, 'player', kind);
               const affordable = canAfford(snapshot.resources, cost);
               const queued = snapshot.unitQueues[kind] ?? 0;
               const disabled = !hasPrereq || !affordable || popCapped;
+              const lockLabel =
+                kind === 'trebuchet'
+                  ? 'Castle Age + Tower'
+                  : BUILDINGS[reqBuilding].shortName;
 
               return (
                 <button
@@ -1217,7 +1696,11 @@ export function EmpireHud({
                     </span>
                   )}
 
-                  <EmpireIcon name={icon} size={18} />
+                  {visual.type === 'empire' ? (
+                    <EmpireIcon name={visual.icon} size={18} />
+                  ) : (
+                    <TrebuchetSvg size={18} />
+                  )}
 
                   <span
                     style={{
@@ -1236,14 +1719,15 @@ export function EmpireHud({
                   {!hasPrereq ? (
                     <span
                       style={{
-                        fontSize: '8px',
+                        fontSize: kind === 'trebuchet' ? '7.5px' : '8px',
                         fontWeight: 700,
                         color: '#fde68a',
-                        whiteSpace: 'nowrap',
-                        lineHeight: 1,
+                        whiteSpace: kind === 'trebuchet' ? 'normal' : 'nowrap',
+                        textAlign: 'center',
+                        lineHeight: 1.05,
                       }}
                     >
-                      {BUILDINGS[reqBuilding].shortName}
+                      {lockLabel}
                     </span>
                   ) : popCapped ? (
                     <span
@@ -1281,7 +1765,10 @@ export function EmpireHud({
                     !affordable && !isPlacing ? 'pe-command-card-locked' : ''
                   }`}
                   title={`${bSpec.name} [${bSpec.hotkey}] — ${bSpec.description}`}
-                  onClick={() => onSelectPlacement(isPlacing ? null : kind)}
+                  onClick={() => {
+                    if (demolishMode) onToggleDemolish?.();
+                    onSelectPlacement(isPlacing ? null : kind);
+                  }}
                 >
                   {builtCount > 0 && (
                     <span

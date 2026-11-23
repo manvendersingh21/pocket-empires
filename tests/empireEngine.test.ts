@@ -26,7 +26,7 @@ registerHooks({
   },
 });
 
-const { BUILDINGS, MAP_SIZE, UNITS } = await import('../src/types/rts.ts');
+const { BUILDINGS, CASTLE_AGE_COST, MAP_SIZE, UNITS } = await import('../src/types/rts.ts');
 const { createRng, hashString, puzzleNumberForDate } = await import('../src/engine/rng.ts');
 const {
   buildMapTiles,
@@ -37,10 +37,13 @@ const {
 const { buildBlockedGrid, findPath, isTileWalkable } = await import('../src/engine/pathfinding.ts');
 const {
   canPlaceBuilding,
+  cmdAdvanceAge,
+  cmdDemolishBuilding,
   cmdIssueOrder,
   cmdPlaceBuilding,
   cmdTrainUnit,
   cmdTriggerTaunt,
+  computeRaidDestruction,
   computeScoreSummary,
   countTamedHorses,
   createBaseBuilderState,
@@ -48,6 +51,7 @@ const {
   createPlayerRaidState,
   exportBaseBlueprint,
   formatChronicleComment,
+  getEffectiveBuildingCost,
   getEffectiveUnitStats,
   getTeamPop,
   stepGame,
@@ -667,6 +671,31 @@ describe('AoE Pond Fish, Wild Horses, Farms, Walls & Clash Base Raids', () => {
     assert.equal(blocked[12 * builder.mapSize + 11], 0, 'Wheat farms must remain walkable');
     assert.equal(blocked[10 * builder.mapSize + 8], 1, 'Stone walls must block enemy pathing');
 
+    const friendlyBlocked = buildBlockedGrid(
+      builder.tiles,
+      builder.buildings,
+      builder.mapSize,
+      undefined,
+      'player',
+    );
+    const enemyBlocked = buildBlockedGrid(
+      builder.tiles,
+      builder.buildings,
+      builder.mapSize,
+      undefined,
+      'enemy',
+    );
+    assert.equal(
+      friendlyBlocked[10 * builder.mapSize + 8],
+      0,
+      'Friendly stone walls act as passable portcullis gates for same-team units',
+    );
+    assert.equal(
+      enemyBlocked[10 * builder.mapSize + 8],
+      1,
+      'Stone walls block opposing-team invaders',
+    );
+
     const blueprint = exportBaseBlueprint(builder, 'LadyAethelflaed', 'Iron Pond Keep');
     assert.equal(blueprint.owner, 'LadyAethelflaed');
     assert.ok(blueprint.buildings.some((b) => b.kind === 'stone_wall'));
@@ -683,5 +712,188 @@ describe('AoE Pond Fish, Wild Horses, Farms, Walls & Clash Base Raids', () => {
       raid.buildings.some((b) => b.team === 'enemy' && b.kind === 'town_center'),
       'Expected defender Town Center spawned on raid battlefield',
     );
+  });
+
+  test('fluffy sheep herd on proximity (+45 food) and wild boars yield +120 food when hunted', () => {
+    const state = createInitialState(makeNeutralSpec());
+    state.enemyWaveTimer = 999;
+
+    const sheep = state.horses?.find((h) => h.kind === 'sheep' && h.team === 'neutral');
+    const boar = state.horses?.find((h) => h.kind === 'boar' && h.team === 'neutral');
+    assert.ok(sheep, 'Expected symmetric neutral fluffy sheep on initial map');
+    assert.ok(boar, 'Expected symmetric neutral wild boar on initial map');
+
+    const scout = state.units.find((u) => u.team === 'player' && u.kind === 'scout')!;
+    const foodBeforeSheep = state.resources.player.food;
+    scout.x = sheep.x + 0.25;
+    scout.y = sheep.y + 0.25;
+    stepGame(state, 0.05);
+    assert.equal(sheep.team, 'player', 'Expected sheep to join player flock');
+    assert.equal(state.resources.player.food, foodBeforeSheep + 45);
+    assert.equal(state.stats.sheepHerded, 1);
+
+    const militia = trainUnitViaBuilding(state, 'player', 'militia', 11, 10);
+    for (const u of state.units) {
+      if (u.kind === 'villager') u.order = { type: 'idle' };
+    }
+    for (const h of state.horses ?? []) {
+      if (h.id !== boar.id && h.team === 'neutral') {
+        h.x = 14.5;
+        h.y = 14.5;
+        h.targetX = 14.5;
+        h.targetY = 14.5;
+      }
+    }
+    const foodBeforeBoar = state.resources.player.food;
+    militia.x = boar.x + 0.3;
+    militia.y = boar.y + 0.3;
+    militia.order = { type: 'idle' };
+    scout.x = boar.x - 0.3;
+    scout.y = boar.y - 0.3;
+    scout.order = { type: 'idle' };
+
+    for (let i = 0; i < 60 && state.horses?.some((h) => h.id === boar.id); i++) {
+      state.enemyWaveTimer = 999;
+      stepGame(state, 0.05);
+    }
+
+    assert.equal(
+      state.horses?.some((h) => h.id === boar.id),
+      false,
+      'Expected hunted wild boar to be cleared once HP reaches 0',
+    );
+    assert.equal(state.resources.player.food, foodBeforeBoar + 120);
+    assert.equal(state.stats.boarsHunted, 1);
+  });
+
+  test('Castle Age progression buffs TC & units (+15%) and unlocks Counterweight Trebuchet (90 siege boulder damage)', () => {
+    const state = createInitialState(makeNeutralSpec());
+    state.enemyWaveTimer = 999;
+
+    const tower = cmdPlaceBuilding(state, 'player', 'watchtower', 11, 10);
+    assert.ok(tower, 'Expected watchtower placement to succeed');
+    tower.built = true;
+    tower.hp = tower.maxHp;
+
+    state.resources.player = { wood: 300, food: 300, gold: 300 };
+    assert.equal(
+      cmdTrainUnit(state, 'player', 'trebuchet', tower.id),
+      false,
+      'Trebuchet must remain locked in Feudal Age (Age 1)',
+    );
+
+    const playerTc = state.buildings.find((b) => b.team === 'player' && b.kind === 'town_center')!;
+    const tcMaxBefore = playerTc.maxHp;
+    const militiaAge1 = getEffectiveUnitStats(state.spec, 'player', 'militia', 0, 1);
+
+    const advanced = cmdAdvanceAge(state, 'player');
+    assert.equal(advanced, true, 'Expected cmdAdvanceAge to succeed with sufficient Food & Gold');
+    assert.equal(state.ages?.player, 2);
+    assert.equal(state.resources.player.food, 300 - CASTLE_AGE_COST.food);
+    assert.equal(state.resources.player.gold, 300 - CASTLE_AGE_COST.gold);
+    assert.equal(playerTc.maxHp, tcMaxBefore + 250);
+    assert.equal(cmdAdvanceAge(state, 'player'), false, 'Cannot advance past Castle Age II');
+
+    const militiaAge2 = getEffectiveUnitStats(state.spec, 'player', 'militia', 0, 2);
+    assert.equal(militiaAge2.maxHp, Math.round(militiaAge1.maxHp * 1.15));
+    assert.equal(militiaAge2.damage, Math.round(militiaAge1.damage * 1.15));
+
+    const trebuchet = trainUnitViaBuilding(state, 'player', 'trebuchet', 11, 10);
+    assert.equal(trebuchet.kind, 'trebuchet');
+
+    for (const u of state.units) {
+      if (u.id !== trebuchet.id) {
+        u.order = { type: 'idle' };
+        if (u.kind !== 'villager') {
+          u.x = u.team === 'player' ? 14.5 : 1.5;
+          u.y = u.team === 'player' ? 14.5 : 1.5;
+        }
+      }
+    }
+    state.projectiles = [];
+
+    const enemyWall: Building = {
+      id: state.nextId++,
+      team: 'enemy',
+      kind: 'stone_wall',
+      tileX: 5,
+      tileY: 5,
+      size: 1,
+      hp: BUILDINGS.stone_wall.maxHp,
+      maxHp: BUILDINGS.stone_wall.maxHp,
+      built: true,
+      buildProgress: 1,
+      queue: [],
+      rallyX: 5.5,
+      rallyY: 6.2,
+      attackTimer: 0,
+    };
+    state.buildings.push(enemyWall);
+
+    trebuchet.x = 5.5;
+    trebuchet.y = 11.5;
+    trebuchet.attackTimer = 0;
+    assert.equal(cmdIssueOrder(state, 'player', [trebuchet.id], 5, 5), 'attack');
+
+    stepGame(state, 0.05);
+    const boulder = state.projectiles.find((p) => p.kind === 'boulder');
+    assert.ok(boulder, 'Expected trebuchet to launch a boulder projectile');
+    assert.equal(boulder.damage, 90, 'Expected 90 siege damage vs building');
+
+    const wallHpBefore = enemyWall.hp;
+    for (let i = 0; i < 60 && state.projectiles.some((p) => p.id === boulder.id); i++) {
+      state.enemyWaveTimer = 999;
+      stepGame(state, 0.05);
+    }
+    assert.equal(wallHpBefore - enemyWall.hp, 90);
+  });
+
+  test('cmdDemolishBuilding refunds 75% cost while protecting Town Center, and computeRaidDestruction tracks stars', () => {
+    const builder = createBaseBuilderState(null, 'MasterBuilder');
+    const tc = builder.buildings.find((b) => b.kind === 'town_center')!;
+    assert.equal(
+      cmdDemolishBuilding(builder, 'player', tc.tileX, tc.tileY),
+      false,
+      'Must never demolish own Town Center',
+    );
+
+    const towerCost = getEffectiveBuildingCost(builder.spec, 'player', 'watchtower');
+    const placed = cmdPlaceBuilding(builder, 'player', 'watchtower', 8, 10);
+    assert.ok(placed);
+    const woodAfterPlace = builder.resources.player.wood;
+    const goldAfterPlace = builder.resources.player.gold;
+
+    assert.equal(cmdDemolishBuilding(builder, 'player', 8, 10), true);
+    assert.equal(builder.resources.player.wood, woodAfterPlace + Math.round(towerCost.wood * 0.75));
+    assert.equal(builder.resources.player.gold, goldAfterPlace + Math.round(towerCost.gold * 0.75));
+    assert.equal(
+      builder.buildings.some((b) => b.id === placed.id),
+      false,
+      'Demolished building must be removed from state.buildings',
+    );
+
+    const bp = exportBaseBlueprint(builder, 'DefenderX', 'Granite Citadel');
+    bp.buildings.push(
+      { kind: 'watchtower', tileX: 8, tileY: 10 },
+      { kind: 'barracks', tileX: 11, tileY: 11 },
+      { kind: 'stone_wall', tileX: 9, tileY: 10 },
+    );
+    const raid = createPlayerRaidState(bp, 'franks');
+    assert.deepEqual(computeRaidDestruction(raid), { destructionPct: 0, raidStars: 0 });
+
+    const nonTc = raid.buildings.filter((b) => b.team === 'enemy' && b.kind !== 'town_center');
+    for (const b of nonTc) b.hp = 0;
+    raid.buildings = raid.buildings.filter((b) => b.hp > 0);
+    raid.stats.enemyBuildingsRazed = nonTc.length;
+
+    const mid = computeRaidDestruction(raid);
+    assert.ok(mid.destructionPct >= 50 && mid.destructionPct < 100);
+    assert.equal(mid.raidStars, 1);
+
+    raid.buildings = raid.buildings.filter((b) => b.team !== 'enemy');
+    raid.stats.enemyBuildingsRazed += 1;
+    raid.outcome = 'victory';
+    raid.timeSec = 95;
+    assert.deepEqual(computeRaidDestruction(raid), { destructionPct: 100, raidStars: 3 });
   });
 });

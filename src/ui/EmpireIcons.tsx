@@ -58,7 +58,10 @@ export type EmpireIconName =
   | 'settings'
   | 'raid'
   | 'home_base'
-  | 'publish';
+  | 'publish'
+  | 'trebuchet'
+  | 'castle_age'
+  | 'demolish';
 
 export interface EmpireIconProps {
   name: EmpireIconName;
@@ -1679,6 +1682,201 @@ function renderIconArtwork(name: EmpireIconName): React.ReactNode {
             strokeLinejoin="round"
           />
           <polygon points="12,3.7 15.6,7.6 13.3,7.6 13.3,15 12,15" fill="#fef08a" opacity="0.7" />
+        </>
+      );
+
+    case 'trebuchet':
+      // Counterweight Siege Trebuchet Silhouette (wooden A-frame, counterweight box & sling arm)
+      return (
+        <>
+          <rect
+            x="2.8"
+            y="17.8"
+            width="18.4"
+            height="2.4"
+            rx="0.7"
+            fill="#92400e"
+            stroke={INK}
+            strokeWidth="1.25"
+          />
+          <rect x="3.5" y="18.2" width="17" height="0.8" fill="#d97706" />
+          {/* Tapered oak throwing beam */}
+          <polygon
+            points="5.2,9.8 20.4,2.8 21,4.2 5.8,11.6"
+            fill="#d97706"
+            stroke={INK}
+            strokeWidth="1.25"
+            strokeLinejoin="round"
+          />
+          <line
+            x1="6"
+            y1="10.1"
+            x2="20.1"
+            y2="3.6"
+            stroke="#fde68a"
+            strokeWidth="0.9"
+            strokeLinecap="round"
+          />
+          {/* Rope sling & stone boulder */}
+          <path
+            d="M20.2 4.1L18.6 9.2M20.6 4.2L20.8 9.2"
+            stroke="#cbd5e1"
+            strokeWidth="1.15"
+            strokeLinecap="round"
+          />
+          <circle cx="19.7" cy="10.2" r="2.1" fill="#cbd5e1" stroke={INK} strokeWidth="1.2" />
+          <circle cx="19.1" cy="9.6" r="0.8" fill="#f8fafc" />
+          {/* Hanging iron-bound counterweight box */}
+          <line x1="6" y1="10.6" x2="6" y2="12.2" stroke="#94a3b8" strokeWidth="1.4" />
+          <polygon
+            points="3.9,12.2 8.1,12.2 8.6,16.2 3.4,16.2"
+            fill="#64748b"
+            stroke={INK}
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+          />
+          <polygon points="4.5,12.8 6.2,12.8 6,15.6 4.1,15.6" fill="#94a3b8" />
+          <circle cx="6" cy="14.2" r="0.75" fill="#f5b942" />
+          {/* Tall wooden A-frame trestle */}
+          <path
+            d="M7.8 18L11.4 8.2L15.2 18"
+            fill="none"
+            stroke={INK}
+            strokeWidth="3.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M7.8 18L11.4 8.2L15.2 18"
+            fill="none"
+            stroke="#b45309"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <line
+            x1="9.2"
+            y1="14.2"
+            x2="13.8"
+            y2="14.2"
+            stroke="#92400e"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+          />
+          <circle cx="11.4" cy="8.2" r="1.55" fill="#f5b942" stroke={INK} strokeWidth="1.05" />
+          {/* Spoked siege wheels */}
+          <circle cx="6.2" cy="19.8" r="2.05" fill="#b45309" stroke={INK} strokeWidth="1.2" />
+          <circle cx="6.2" cy="19.8" r="0.75" fill="#f5b942" />
+          <circle cx="17.8" cy="19.8" r="2.05" fill="#b45309" stroke={INK} strokeWidth="1.2" />
+          <circle cx="17.8" cy="19.8" r="0.75" fill="#f5b942" />
+        </>
+      );
+
+    case 'castle_age':
+      // Illuminated Golden Imperial Crown + Stone Keep Spire
+      return (
+        <>
+          <circle cx="12" cy="9.5" r="8.4" fill="#facc15" fillOpacity="0.2" />
+          <path
+            d="M4.2 4.6L6 6M19.8 4.6L18 6"
+            stroke="#fde047"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          {/* Ashlar stone keep spire tower */}
+          <path
+            d="M5.4 21.2V12.4H8V13.9H10.5V12.4H13.5V13.9H16V12.4H18.6V21.2Z"
+            fill="#94a3b8"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path d="M6.2 20.4V13.2H7.3V14.7H11.2V13.2H12V20.4Z" fill="#e2e8f0" />
+          <line x1="5.6" y1="15.4" x2="18.4" y2="15.4" stroke="#f5b942" strokeWidth="1.2" />
+          <path
+            d="M9.8 21.2V17.2C9.8 15.9 10.8 15 12 15C13.2 15 14.2 15.9 14.2 17.2V21.2Z"
+            fill="#1e293b"
+            stroke="#f5b942"
+            strokeWidth="1.05"
+          />
+          {/* Illuminated golden imperial crown */}
+          <path
+            d="M4.2 10.6L3.2 4.8L8 7.8L12 2.4L16 7.8L20.8 4.8L19.8 10.6Z"
+            fill="#f5b942"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path d="M4.9 10L4.1 5.9L8 8.4L12 3.4V10Z" fill="#fef08a" opacity="0.75" />
+          <rect
+            x="4.2"
+            y="9.8"
+            width="15.6"
+            height="2.4"
+            rx="0.8"
+            fill="#d97706"
+            stroke={INK}
+            strokeWidth="1.2"
+          />
+          <circle cx="12" cy="7.8" r="1.25" fill="#dc2626" stroke={INK} strokeWidth="0.75" />
+          <circle cx="7.4" cy="8.5" r="0.9" fill="#2563eb" stroke={INK} strokeWidth="0.65" />
+          <circle cx="16.6" cy="8.5" r="0.9" fill="#2563eb" stroke={INK} strokeWidth="0.65" />
+          <circle cx="12" cy="2.1" r="1.15" fill="#fef9c3" stroke={INK} strokeWidth="0.85" />
+        </>
+      );
+
+    case 'demolish':
+      // Crossed Pickaxe & Sledgehammer in Warm Coral
+      return (
+        <>
+          {/* Sledgehammer shaft & warm coral head */}
+          <line
+            x1="4.4"
+            y1="20.2"
+            x2="16.8"
+            y2="7.8"
+            stroke="#92400e"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          />
+          <rect
+            x="13.1"
+            y="5.1"
+            width="7.6"
+            height="4.8"
+            rx="1"
+            transform="rotate(45 16.9 7.5)"
+            fill="#fb7185"
+            stroke={INK}
+            strokeWidth="1.35"
+          />
+          <polygon points="16.6,4.2 19.6,7.2 18.2,8.6 15.2,5.6" fill="#fda4af" />
+          {/* Pickaxe shaft & curved twin-pointed warm coral-amber head */}
+          <line
+            x1="19.6"
+            y1="20.2"
+            x2="7.2"
+            y2="7.8"
+            stroke="#b45309"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          />
+          <path
+            d="M2.8 11.4C3.8 7.8 6.8 4.8 11.6 3.6C9.6 5.8 8.6 7.2 8.2 8.8C6.6 8.8 4.8 9.8 2.8 11.4Z"
+            fill="#f97316"
+            stroke={INK}
+            strokeWidth="1.3"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M3.8 10.1C4.9 7.6 7.1 5.6 10.3 4.5C9.1 5.9 8.3 6.9 7.9 8C6.5 8.1 5.1 8.8 3.8 10.1Z"
+            fill="#fda4af"
+          />
+          <circle cx="12" cy="12.6" r="1.25" fill="#fde047" stroke={INK} strokeWidth="0.9" />
+          <polygon
+            points="12,1.8 12.8,3.6 14.6,4.4 12.8,5.2 12,7 11.2,5.2 9.4,4.4 11.2,3.6"
+            fill="#fda4af"
+          />
         </>
       );
   }

@@ -37,6 +37,8 @@ function resolveStrategyIconName(strategyLabel: string): EmpireIconName {
   if (lower.includes('longbow') || lower.includes('archer') || lower.includes('volley')) {
     return 'archer';
   }
+  if (lower.includes('trebuchet') || lower.includes('boulder')) return 'target';
+  if (lower.includes('castle')) return 'crown';
   if (lower.includes('blitz') || lower.includes('fast')) return 'bolt';
   return 'swords';
 }
@@ -65,11 +67,11 @@ const CHRONICLE_CSS = `
   padding: 12px;
   background: radial-gradient(
     circle at 50% 38%,
-    rgba(16, 24, 36, 0.34) 0%,
-    rgba(8, 12, 18, 0.64) 100%
+    rgba(16, 24, 36, 0.24) 0%,
+    rgba(8, 12, 18, 0.52) 100%
   );
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   animation: pe-modal-fade-in 0.18s ease-out;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: #f8fafc;
@@ -92,13 +94,13 @@ const CHRONICLE_CSS = `
   max-height: calc(100dvh - 24px);
   overflow-y: auto;
   border-radius: 20px;
-  background: rgba(14, 18, 26, 0.68);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(14, 20, 30, 0.62);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.24);
   box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.62),
-    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    0 24px 60px rgba(0, 0, 0, 0.54),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
   padding: 16px 16px 15px;
   display: flex;
   flex-direction: column;
@@ -222,13 +224,23 @@ export function ChronicleModal({
   const beatPar = summary.victory && summary.timeSec <= state.spec.parSec;
   const playerCiv = CIVS[state.spec.playerCiv];
   const isRaid = state.mode === 'raid';
+  const initialEnemyBlds = state.initialEnemyBuildingCount ?? 0;
+  const remainingEnemyBlds = state.buildings.filter((b) => b.team === 'enemy' && b.hp > 0).length;
+  const raidDestructionPct = summary.victory
+    ? 100
+    : initialEnemyBlds > 0
+      ? Math.min(
+          99,
+          Math.max(0, Math.round(((initialEnemyBlds - remainingEnemyBlds) / initialEnemyBlds) * 100)),
+        )
+      : 0;
 
   const subtitleLabel =
     isRaid && state.raidTargetOwner
-      ? `Player Raid vs u/${stripEmoji(state.raidTargetOwner)} · ${state.spec.mapName}`
+      ? `Player Raid vs u/${stripEmoji(state.raidTargetOwner)} · ${raidDestructionPct}% Destroyed`
       : state.spec.isCustom
-        ? `Custom Siege · ${state.spec.mapName}`
-        : `Daily Siege #${state.spec.puzzleNumber} · ${state.spec.mapName}`;
+        ? `Custom Siege · ${stripEmoji(state.spec.mapName)}`
+        : `Daily Siege #${state.spec.puzzleNumber} · ${stripEmoji(state.spec.mapName)}`;
 
   const postButtonContent =
     commentStatus === 'posting' ? (
@@ -519,6 +531,26 @@ export function ChronicleModal({
             <EmpireIcon name="swords" size={12} />
             <span>{state.stats.enemyUnitsSlain} Slain</span>
           </span>
+
+          {state.ages?.player === 2 && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '4px 10px',
+                borderRadius: '999px',
+                background: 'rgba(245, 168, 36, 0.2)',
+                border: '1px solid rgba(254, 240, 138, 0.55)',
+                fontSize: '11px',
+                fontWeight: 800,
+                color: '#fef3c7',
+              }}
+            >
+              <EmpireIcon name="crown" size={12} />
+              <span>Castle Age II</span>
+            </span>
+          )}
 
           {state.stats.cheekyWololo && (
             <span

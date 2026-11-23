@@ -83,6 +83,41 @@
     "selectorRoleOrText": "[data-testid=\"hud-publish-base-btn\"]",
     "description": "Emerald frosted-glass Publish Base button in My Base mode saving the player's fortress layout for Clash-style community raids."
   },
+  "hud_empire_name_input": {
+    "route": "/game.html#base_builder",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-empire-name-input\"]",
+    "description": "Translucent citadel naming input in My Base mode allowing players to title their fortress before publishing."
+  },
+  "hud_demolish_btn": {
+    "route": "/game.html#base_builder",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-demolish-btn\"]",
+    "description": "My Base builder Demolish toggle pill allowing players to clear placed structures for a 75% resource refund."
+  },
+  "hud_raid_destruction_pill": {
+    "route": "/game.html#raid",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-raid-destruction-pill\"]",
+    "description": "Live Clash-style Raid Destruction percentage pill shown when raiding published Redditor citadels."
+  },
+  "hud_age_up_btn": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-age-up-btn\"]",
+    "description": "Castle Age advancement pill (+15% unit HP & attack, +250 Keep HP, gold roof trim, unlocks Counterweight Trebuchets)."
+  },
+  "hud_train_trebuchet": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-train-trebuchet\"]",
+    "description": "Counterweight Trebuchet command card inside the Train dock (unlocked in Castle Age II with a Watchtower)."
+  },
   "hud_resource_ledger": {
     "route": "/game.html#game",
     "component": "EmpireHud",

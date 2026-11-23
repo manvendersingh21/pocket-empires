@@ -13,12 +13,16 @@ import {
   generateDailySpec,
 } from '../engine/dailyGenerator.js';
 import {
+  cmdAdvanceAge,
   cmdAttackEnemyKeep,
+  cmdDemolishBuilding,
   cmdIssueOrder,
   cmdPlaceBuilding,
   cmdTrainUnit,
   cmdTriggerTaunt,
+  computeRaidDestruction,
   computeScoreSummary,
+  countTamedHorses,
   createBaseBuilderState,
   createInitialState,
   createPlayerRaidState,
@@ -182,6 +186,9 @@ function makeSnapshot(state: GameState): HudSnapshot {
     monkCount,
     ownedBuildings,
     unitQueues,
+    playerAge: state.ages?.player ?? 1,
+    tamedHorses: countTamedHorses(state, 'player'),
+    raidDestructionPct: computeRaidDestruction(state).destructionPct,
   };
 }
 
@@ -205,6 +212,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showMinimap, setShowMinimap] = useState(true);
   const [publishStatus, setPublishStatus] = useState<'idle' | 'publishing' | 'published' | 'saved'>('idle');
+  const [demolishMode, setDemolishMode] = useState(false);
+  const [empireName, setEmpireName] = useState<string>(
+    () => myBase?.empireName ?? 'Royal Homestead',
+  );
 
   const stateRef = useRef<GameState>(createBaseBuilderState(myBase));
   const accRef = useRef(0);
@@ -271,6 +282,7 @@ export default function App() {
         }
         if (bData.myBase) {
           setMyBase(bData.myBase);
+          setEmpireName(bData.myBase.empireName);
           saveLocal('empire:myBase', bData.myBase);
         }
       }
@@ -307,6 +319,7 @@ export default function App() {
     setSelectedUnitIds(idleV ? [idleV.id] : []);
     setSelectedBuildingId(null);
     setPlacementKind(null);
+    setDemolishMode(false);
     setCommentStatus('idle');
     setPublishStatus('idle');
     setFlairText(null);
@@ -348,6 +361,7 @@ export default function App() {
   const returnToHomeOverlay = useCallback(() => {
     setSettingsOpen(false);
     setPlacementKind(null);
+    setDemolishMode(false);
     setSelectedUnitIds([]);
     setSelectedBuildingId(null);
     const ambient = createBaseBuilderState(myBase);
@@ -359,8 +373,10 @@ export default function App() {
   const handlePublishBase = useCallback(async () => {
     unlockAudio();
     const st = stateRef.current;
-    const blueprint = exportBaseBlueprint(st, myBase?.owner ?? 'YourKeep', myBase?.empireName ?? 'Royal Homestead');
+    const chosenName = empireName.trim() || myBase?.empireName || 'Royal Homestead';
+    const blueprint = exportBaseBlueprint(st, myBase?.owner ?? 'YourKeep', chosenName);
     setMyBase(blueprint);
+    setEmpireName(blueprint.empireName);
     saveLocal('empire:myBase', blueprint);
     setPlayerBases((prev) => [blueprint, ...prev.filter((b) => b.owner !== blueprint.owner)]);
 
@@ -390,6 +406,7 @@ export default function App() {
         };
         if (data.base) {
           setMyBase(data.base);
+          setEmpireName(data.base.empireName);
           saveLocal('empire:myBase', data.base);
         }
         if (data.bases) setPlayerBases(data.bases);
@@ -400,7 +417,7 @@ export default function App() {
     } catch {
       setPublishStatus('saved');
     }
-  }, [myBase]);
+  }, [empireName, myBase]);
 
   const handleMatchCompletion = useCallback(
     (st: GameState) => {
@@ -484,7 +501,6 @@ export default function App() {
     [streak, lastWinDate, bestScore],
   );
 
-  // Keep the living village gently animated at 0.5x behind the translucent Home overlay, and full speed in-game!
   useFixedSimulationLoop(true, screen === 'war_room' ? 0.5 : gameSpeed, (elapsedSec) => {
     const st = stateRef.current;
     if (st.outcome !== 'playing') {
@@ -586,6 +602,7 @@ export default function App() {
 
     if (e.key === 'Escape') {
       if (settingsOpen) setSettingsOpen(false);
+      else if (demolishMode) setDemolishMode(false);
       else setPlacementKind(null);
       return;
     }
@@ -610,6 +627,19 @@ export default function App() {
         .filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'monk')
         .map((u) => u.id);
       if (monks.length > 0) setSelectedUnitIds(monks);
+    } else if (e.key.toLowerCase() === 'g') {
+      unlockAudio();
+      if (cmdAdvanceAge(st, 'player')) {
+        flushStateSounds(st.soundEvents);
+        setSnapshot(makeSnapshot(st));
+      }
+    } else if (e.key.toLowerCase() === 'x' && st.mode === 'base_builder') {
+      unlockAudio();
+      setDemolishMode((prev) => {
+        const next = !prev;
+        if (next) setPlacementKind(null);
+        return next;
+      });
     } else {
       const buildMap: Record<string, BuildingKind> = {
         q: 'homestead',
@@ -622,7 +652,10 @@ export default function App() {
         y: 'watchtower',
       };
       const bk = buildMap[e.key.toLowerCase()];
-      if (bk) setPlacementKind((prev) => (prev === bk ? null : bk));
+      if (bk) {
+        setDemolishMode(false);
+        setPlacementKind((prev) => (prev === bk ? null : bk));
+      }
     }
   });
 
@@ -630,6 +663,7 @@ export default function App() {
     unlockAudio();
     const st = stateRef.current;
     setPlacementKind(null);
+    setDemolishMode(false);
     setSelectedBuildingId(null);
     if (kind === 'idle_villager') {
       const idle = st.units.filter(
@@ -672,6 +706,24 @@ export default function App() {
       if (placementKind !== 'stone_wall') {
         setPlacementKind(null);
       }
+      flushStateSounds(st.soundEvents);
+      setSnapshot(makeSnapshot(st));
+    }
+  };
+
+  const handleDemolishAt = (tileX: number, tileY: number) => {
+    unlockAudio();
+    const st = stateRef.current;
+    if (cmdDemolishBuilding(st, 'player', tileX, tileY)) {
+      flushStateSounds(st.soundEvents);
+      setSnapshot(makeSnapshot(st));
+    }
+  };
+
+  const handleAdvanceAge = () => {
+    unlockAudio();
+    const st = stateRef.current;
+    if (cmdAdvanceAge(st, 'player')) {
       flushStateSounds(st.soundEvents);
       setSnapshot(makeSnapshot(st));
     }
@@ -783,6 +835,7 @@ export default function App() {
         selectedUnitIds={selectedUnitIds}
         selectedBuildingId={selectedBuildingId}
         placementKind={placementKind}
+        demolishMode={demolishMode}
         onSelectUnits={(ids) => {
           unlockAudio();
           setSelectedUnitIds(ids);
@@ -795,7 +848,11 @@ export default function App() {
         }}
         onIssueTileOrder={handleIssueTileOrder}
         onPlaceBuildingAt={handlePlaceBuildingAt}
-        onCancelPlacement={() => setPlacementKind(null)}
+        onDemolishAt={handleDemolishAt}
+        onCancelPlacement={() => {
+          setPlacementKind(null);
+          setDemolishMode(false);
+        }}
       />
 
       {screen === 'war_room' ? (
@@ -831,6 +888,18 @@ export default function App() {
             gameSpeed={gameSpeed}
             publishStatus={publishStatus}
             basePublished={publishStatus === 'published' || publishStatus === 'saved'}
+            demolishMode={demolishMode}
+            empireName={empireName}
+            onChangeEmpireName={setEmpireName}
+            onToggleDemolish={() => {
+              unlockAudio();
+              setDemolishMode((prev) => {
+                const next = !prev;
+                if (next) setPlacementKind(null);
+                return next;
+              });
+            }}
+            onAdvanceAge={handleAdvanceAge}
             onToggleSpeed={() => setGameSpeed((s) => (s === 1 ? 1.5 : 1))}
             onToggleMute={toggleMute}
             onOpenSettings={() => setSettingsOpen(true)}
@@ -849,6 +918,7 @@ export default function App() {
             onTrainUnit={handleTrainUnit}
             onSelectPlacement={(kind) => {
               unlockAudio();
+              if (kind !== null) setDemolishMode(false);
               setPlacementKind(kind);
             }}
             onTaunt={handleTaunt}

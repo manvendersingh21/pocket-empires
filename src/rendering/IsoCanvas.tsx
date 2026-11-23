@@ -31,11 +31,13 @@ export interface IsoCanvasProps {
   selectedUnitIds: number[];
   selectedBuildingId: number | null;
   placementKind: BuildingKind | null;
+  demolishMode?: boolean;
   onSelectUnits: (ids: number[]) => void;
   onSelectBuilding: (id: number | null) => void;
   onIssueTileOrder: (tileX: number, tileY: number) => void;
   onPlaceBuildingAt: (tileX: number, tileY: number) => void;
   onCancelPlacement: () => void;
+  onDemolishAt?: (tileX: number, tileY: number) => void;
   showMinimap?: boolean;
   interactive?: boolean;
 }
@@ -1331,6 +1333,19 @@ function drawStoneWallSpanY(
   drawIsoBox(ctx, mx - 1.5, my, 3.2, 1.6, 2.6, stoneLeft, stoneRight, stoneTop);
 }
 
+function isPlayerBuildingRemovable(b: Building, allBuildings: Building[]): boolean {
+  if (b.team !== 'player' || b.hp <= 0) return false;
+  if (b.kind !== 'town_center') return true;
+  let livingPlayerKeeps = 0;
+  for (let i = 0; i < allBuildings.length; i++) {
+    const other = allBuildings[i];
+    if (other.team === 'player' && other.hp > 0 && other.kind === 'town_center') {
+      livingPlayerKeeps++;
+    }
+  }
+  return livingPlayerKeeps > 1;
+}
+
 function drawBuilding(
   ctx: CanvasRenderingContext2D,
   b: Building,
@@ -1339,6 +1354,7 @@ function drawBuilding(
   twilight: boolean,
   animSec: number,
   ghostAlpha = 1,
+  isCastleAge = false,
 ) {
   const top = tileToWorld(b.tileX, b.tileY);
   const cx = top.wx;
@@ -1721,10 +1737,22 @@ function drawBuilding(
       );
     }
   } else if (b.kind === 'town_center') {
+    const goldRidge = veilColor('#fde047', twilight);
+    const goldBevel = veilColor('#f59e0b', twilight);
+    const tcTrim = isCastleAge ? goldRidge : cTrim;
+
     // Paved stone courtyard lines + stockpile crates
-    ctx.fillStyle = veilColor('#857d70', twilight);
+    ctx.fillStyle = veilColor(isCastleAge ? '#8f8779' : '#857d70', twilight);
     traceDiamond(ctx, top.wx, top.wy, 2, -5);
     ctx.fill();
+
+    if (isCastleAge) {
+      // Imperial courtyard golden mosaic border
+      traceDiamond(ctx, top.wx, top.wy, 2, -9.5);
+      ctx.strokeStyle = veilColor('#eab308', twilight);
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+    }
 
     // Courtyard crates & resource barrels on east corner
     drawIsoBox(ctx, cx + 26, cy + 3, 5, 2.5, 5, timber, veilColor('#855834', twilight), veilColor('#a47148', twilight));
@@ -1739,7 +1767,16 @@ function drawBuilding(
       drawIsoBox(ctx, px, py, 3.2, 1.6, 15, stoneLeft, stoneRight, stoneTop);
     }
     // Courtyard canopy awning connecting pillars
-    drawPitchedRoof(ctx, cx - 4, cy - 4, 24, 11, 9, cDark, cMain, cTrim);
+    drawPitchedRoof(ctx, cx - 4, cy - 4, 24, 11, 9, cDark, cMain, tcTrim);
+    if (isCastleAge) {
+      ctx.strokeStyle = goldRidge;
+      ctx.lineWidth = 1.7;
+      ctx.beginPath();
+      ctx.moveTo(cx - 29.5, cy - 3);
+      ctx.lineTo(cx - 4, cy - 13);
+      ctx.lineTo(cx + 21.5, cy - 3);
+      ctx.stroke();
+    }
 
     // Northern Great Hall keep body
     const hallCx = cx + 2;
@@ -1755,6 +1792,24 @@ function drawBuilding(
     ctx.lineTo(hallCx + 26, hallCy - 10);
     ctx.stroke();
 
+    if (isCastleAge) {
+      // Castle-Age ashlar stone buttress piers & golden cornice frieze
+      const buttressLeft = veilColor('#cbd5e1', twilight);
+      const buttressRight = veilColor('#f1f5f9', twilight);
+      const buttressTop = veilColor('#f8fafc', twilight);
+      drawIsoBox(ctx, hallCx - 24.2, hallCy + 0.8, 3.8, 1.9, 19.5, buttressLeft, buttressRight, buttressTop);
+      drawIsoBox(ctx, hallCx, hallCy + 12.8, 4.2, 2.1, 19.5, buttressLeft, buttressRight, buttressTop);
+      drawIsoBox(ctx, hallCx + 24.2, hallCy + 0.8, 3.8, 1.9, 19.5, buttressLeft, buttressRight, buttressTop);
+
+      ctx.strokeStyle = goldBevel;
+      ctx.lineWidth = 1.9;
+      ctx.beginPath();
+      ctx.moveTo(hallCx - 26, hallCy - 19.4);
+      ctx.lineTo(hallCx, hallCy - 6.4);
+      ctx.lineTo(hallCx + 26, hallCy - 19.4);
+      ctx.stroke();
+    }
+
     // Warm lit arched windows
     ctx.fillStyle = windowGlow;
     ctx.fillRect(hallCx - 16, hallCy - 11, 4, 5.5);
@@ -1763,7 +1818,30 @@ function drawBuilding(
     ctx.fillRect(hallCx + 15, hallCy - 11, 4, 5.5);
 
     // Great Hall steep team-colored roof
-    drawPitchedRoof(ctx, hallCx, hallCy - 21, 28, 14, 17, cDark, cMain, cTrim);
+    drawPitchedRoof(ctx, hallCx, hallCy - 21, 28, 14, 17, cDark, cMain, tcTrim);
+
+    if (isCastleAge) {
+      // Gleaming gold roof ridges & hip crest along the Great Hall
+      ctx.strokeStyle = goldBevel;
+      ctx.lineWidth = 2.7;
+      ctx.beginPath();
+      ctx.moveTo(hallCx - 29.5, hallCy - 20);
+      ctx.lineTo(hallCx, hallCy - 38);
+      ctx.lineTo(hallCx + 29.5, hallCy - 20);
+      ctx.moveTo(hallCx, hallCy - 38);
+      ctx.lineTo(hallCx, hallCy - 5);
+      ctx.stroke();
+
+      ctx.strokeStyle = goldRidge;
+      ctx.lineWidth = 1.35;
+      ctx.beginPath();
+      ctx.moveTo(hallCx - 29.5, hallCy - 20);
+      ctx.lineTo(hallCx, hallCy - 38);
+      ctx.lineTo(hallCx + 29.5, hallCy - 20);
+      ctx.moveTo(hallCx, hallCy - 38);
+      ctx.lineTo(hallCx, hallCy - 5);
+      ctx.stroke();
+    }
 
     // Stone chimney + animated smoke puffs
     const chimX = hallCx - 14;
@@ -1781,8 +1859,25 @@ function drawBuilding(
       }
     }
 
-    // Tall Royal/Imperial Pennant Flag
-    drawPennant(ctx, hallCx, hallCy - 37, 15, cLight, cTrim, animSec, b.id);
+    if (isCastleAge) {
+      // Central golden imperial finial spire + Twin Royal Pennants!
+      ctx.strokeStyle = goldRidge;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(hallCx, hallCy - 37.5);
+      ctx.lineTo(hallCx, hallCy - 45.5);
+      ctx.stroke();
+      ctx.fillStyle = goldRidge;
+      ctx.beginPath();
+      ctx.arc(hallCx, hallCy - 46.5, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      drawPennant(ctx, hallCx - 9.5, hallCy - 32.5, 15.5, cLight, goldRidge, animSec, b.id + 1);
+      drawPennant(ctx, hallCx + 9.5, hallCy - 32.5, 15.5, cLight, goldRidge, animSec, b.id + 4);
+    } else {
+      // Tall Royal/Imperial Pennant Flag
+      drawPennant(ctx, hallCx, hallCy - 37, 15, cLight, cTrim, animSec, b.id);
+    }
   } else if (b.kind === 'homestead') {
     // Cozy cottage + lumber/grain drop-off annex
     drawIsoBox(ctx, cx - 2, cy + 2, 16, 8, 13, plasterLeft, plasterRight, stoneTop);
@@ -1899,12 +1994,66 @@ function drawBuilding(
     ctx.lineTo(spireX + 4, spireBaseY - 6);
     ctx.stroke();
   } else if (b.kind === 'watchtower') {
+    const goldRidge = veilColor('#fde047', twilight);
+    const goldBevel = veilColor('#f59e0b', twilight);
+
     // Tall crenelated medieval stone keep tower!
     drawIsoBox(ctx, cx, cy + 3, 13, 6.5, 32, stoneLeft, stoneRight, stoneTop);
 
+    if (isCastleAge) {
+      // Castle-Age flared ashlar stone buttresses clasping the keep base
+      const buttressLeft = veilColor('#cbd5e1', twilight);
+      const buttressRight = veilColor('#f1f5f9', twilight);
+      const buttressTop = veilColor('#f8fafc', twilight);
+      drawIsoBox(ctx, cx - 12.4, cy + 3.4, 3.6, 1.8, 17.5, buttressLeft, buttressRight, buttressTop);
+      drawIsoBox(ctx, cx, cy + 9.4, 3.8, 1.9, 17.5, buttressLeft, buttressRight, buttressTop);
+      drawIsoBox(ctx, cx + 12.4, cy + 3.4, 3.6, 1.8, 17.5, buttressLeft, buttressRight, buttressTop);
+    }
+
     // Projecting stone battlement parapet + merlons
     drawIsoBox(ctx, cx, cy - 29, 15.5, 7.8, 5, veilColor('#78716c', twilight), stoneLeft, stoneTop);
-    drawPitchedRoof(ctx, cx, cy - 34, 12, 6, 10, cDark, cMain, cTrim);
+    if (isCastleAge) {
+      ctx.strokeStyle = goldBevel;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(cx - 15.5, cy - 31.2);
+      ctx.lineTo(cx, cy - 23.4);
+      ctx.lineTo(cx + 15.5, cy - 31.2);
+      ctx.stroke();
+    }
+
+    drawPitchedRoof(ctx, cx, cy - 34, 12, 6, 10, cDark, cMain, isCastleAge ? goldRidge : cTrim);
+
+    if (isCastleAge) {
+      // Gleaming gold roof ridges, hip rafters & Twin Royal Pennants!
+      ctx.strokeStyle = goldBevel;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(cx - 13.5, cy - 33);
+      ctx.lineTo(cx, cy - 44);
+      ctx.lineTo(cx + 13.5, cy - 33);
+      ctx.moveTo(cx, cy - 44);
+      ctx.lineTo(cx, cy - 26);
+      ctx.stroke();
+
+      ctx.strokeStyle = goldRidge;
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.moveTo(cx - 13.5, cy - 33);
+      ctx.lineTo(cx, cy - 44);
+      ctx.lineTo(cx + 13.5, cy - 33);
+      ctx.moveTo(cx, cy - 44);
+      ctx.lineTo(cx, cy - 26);
+      ctx.stroke();
+
+      ctx.fillStyle = goldRidge;
+      ctx.beginPath();
+      ctx.arc(cx, cy - 45.6, 2.0, 0, Math.PI * 2);
+      ctx.fill();
+
+      drawPennant(ctx, cx - 12, cy - 33.5, 11.5, cLight, goldRidge, animSec, b.id + 1);
+      drawPennant(ctx, cx + 12, cy - 33.5, 11.5, cLight, goldRidge, animSec, b.id + 3);
+    }
 
     // Arrow slits & hanging team banner on tower face
     ctx.fillStyle = '#111827';
@@ -1920,6 +2069,11 @@ function drawBuilding(
     ctx.lineTo(cx + 3, cy - 13);
     ctx.closePath();
     ctx.fill();
+    if (isCastleAge) {
+      ctx.strokeStyle = goldRidge;
+      ctx.lineWidth = 1.05;
+      ctx.stroke();
+    }
   }
 
   // Flickering flames on heavily damaged buildings
@@ -1932,9 +2086,13 @@ function drawBuilding(
   if (ghostAlpha === 1 && !twilight) {
     const topBarY =
       b.kind === 'watchtower'
-        ? cy - 50
+        ? isCastleAge
+          ? cy - 54
+          : cy - 50
         : b.kind === 'town_center'
-          ? cy - 58
+          ? isCastleAge
+            ? cy - 61
+            : cy - 58
           : b.kind === 'monastery'
             ? cy - 46
             : b.kind === 'stone_wall'
@@ -1974,9 +2132,16 @@ function drawUnit(
   const { wx, wy } = tileToWorld(u.x, u.y);
   const pal = TEAM_PALETTES[u.team];
   const isMounted = u.kind === 'knight' || u.kind === 'scout';
+  const isSiege = u.kind === 'trebuchet';
   const isMoving = u.path.length > 0 || u.order.type === 'move';
   const stride = Math.sin(u.animPhase * 1.4);
-  const bob = isMoving ? Math.abs(stride) * 1.6 : Math.sin(animSec * 2.5 + u.id) * 0.4;
+  const bob = isSiege
+    ? isMoving
+      ? Math.abs(Math.sin(u.animPhase * 2.3)) * 0.55
+      : 0
+    : isMoving
+      ? Math.abs(stride) * 1.6
+      : Math.sin(animSec * 2.5 + u.id) * 0.4;
   const actionSwing =
     u.attackTimer > 0
       ? Math.sin(u.attackTimer * 14) * 4
@@ -2012,8 +2177,8 @@ function drawUnit(
 
   // 2. Classic AoE II bright green selection ring under selected player units
   if (selected && u.team === 'player') {
-    const rx = isMounted ? 12.5 : 9.5;
-    const ry = isMounted ? 6.4 : 4.9;
+    const rx = isSiege ? 15.5 : isMounted ? 12.5 : 9.5;
+    const ry = isSiege ? 8.0 : isMounted ? 6.4 : 4.9;
     ctx.fillStyle = 'rgba(34, 197, 94, 0.18)';
     ctx.beginPath();
     ctx.ellipse(wx, wy, rx + 1.5, ry + 0.8, 0, 0, Math.PI * 2);
@@ -2029,7 +2194,15 @@ function drawUnit(
   // 3. Soft elliptical ground shadow
   ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
   ctx.beginPath();
-  ctx.ellipse(wx, wy + 1, isMounted ? 10.5 : 7.2, isMounted ? 5.2 : 3.6, 0, 0, Math.PI * 2);
+  ctx.ellipse(
+    wx,
+    wy + 1,
+    isSiege ? 14.5 : isMounted ? 10.5 : 7.2,
+    isSiege ? 7.2 : isMounted ? 5.2 : 3.6,
+    0,
+    0,
+    Math.PI * 2,
+  );
   ctx.fill();
 
   // 4. Facing-oriented unit sprite body
@@ -2408,15 +2581,270 @@ function drawUnit(
     ctx.beginPath();
     ctx.arc(staffX + 1, -23.5 + armLift * 0.5, 2.5, 0, Math.PI * 2);
     ctx.fill();
+  } else if (u.kind === 'trebuchet') {
+    // Age-of-Empires II Counterweight Trebuchet: wheeled oak base, tall A-frame trestles,
+    // heavy swinging counterweight box, long throwing arm with rope sling, and team pennant!
+    const wheelSpin = isMoving ? u.animPhase * 1.9 : 0;
+    const drawSiegeWheel = (wcx: number, wcy: number, r: number, shaded: boolean) => {
+      ctx.fillStyle = shaded ? '#334155' : '#475569';
+      ctx.beginPath();
+      ctx.arc(wcx, wcy, r + 0.65, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = shaded ? '#6b4226' : '#b47b38';
+      ctx.beginPath();
+      ctx.arc(wcx, wcy, r - 0.35, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#1e1b18';
+      ctx.beginPath();
+      ctx.arc(wcx, wcy, r - 1.35, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = shaded ? '#784c2a' : '#d99b52';
+      ctx.lineWidth = 0.95;
+      ctx.beginPath();
+      for (let sp = 0; sp < 4; sp++) {
+        const ang = wheelSpin + (sp * Math.PI) / 2;
+        ctx.moveTo(wcx - Math.cos(ang) * (r - 0.6), wcy - Math.sin(ang) * (r - 0.6));
+        ctx.lineTo(wcx + Math.cos(ang) * (r - 0.6), wcy + Math.sin(ang) * (r - 0.6));
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath();
+      ctx.arc(wcx, wcy, 1.0, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    // 1. Far-side oak wheels
+    drawSiegeWheel(-9.4, -4.4, 3.0, true);
+    drawSiegeWheel(8.6, -4.4, 3.0, true);
+
+    // 2. Heavy timber chassis sills & cross-ties
+    ctx.fillStyle = '#5c3a21';
+    ctx.fillRect(-13.4, -5.8, 26.8, 2.2);
+    ctx.fillStyle = '#78350f';
+    ctx.beginPath();
+    ctx.roundRect(-13.8, -4.4, 27.6, 2.8, 1);
+    ctx.fill();
+    ctx.fillStyle = '#b47b38';
+    ctx.fillRect(-13.2, -4.4, 26.4, 1.0);
+
+    // Iron corner brackets on chassis
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(-12.8, -4.4, 2.2, 2.7);
+    ctx.fillRect(10.6, -4.4, 2.2, 2.7);
+
+    // 3. Far-side A-frame trestle beams meeting at main axle (0.6, -19.2)
+    const axleX = 0.6;
+    const axleY = -19.2;
+    ctx.strokeStyle = '#5c3a21';
+    ctx.lineWidth = 2.3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-6.8, -4.8);
+    ctx.lineTo(axleX - 0.8, axleY);
+    ctx.lineTo(6.4, -4.8);
+    ctx.stroke();
+
+    // 4. Pivoting tapered oak throwing arm, swinging counterweight box & rope sling!
+    const fireNorm = u.attackTimer > 0 ? Math.min(1, u.attackTimer / 2.6) : 0;
+    const releaseSnap =
+      fireNorm > 0.72
+        ? 1 - (1 - fireNorm) / 0.28
+        : Math.pow(fireNorm / 0.72, 1.45) * 0.45;
+    // Poised diagonal angle (-0.54 rad -> -1.18 rad whip up on release!)
+    const armAngle = -0.54 - releaseSnap * 0.64 + Math.sin(animSec * 1.9 + u.id) * 0.025;
+    const dirX = Math.cos(armAngle);
+    const dirY = Math.sin(armAngle);
+
+    const shortLen = 7.4;
+    const longLen = 15.8;
+    const cwEndX = axleX - dirX * shortLen;
+    const cwEndY = axleY - dirY * shortLen;
+    const tipX = axleX + dirX * longLen;
+    const tipY = axleY + dirY * longLen;
+
+    // Hinged heavy timber-and-iron counterweight bucket hanging vertically under cwEnd
+    const boxSway = Math.sin(animSec * 3.1 + u.id) * 0.45 - releaseSnap * 0.8;
+    const boxCx = cwEndX + boxSway;
+    const boxTopY = cwEndY + 1.8;
+
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(cwEndX, cwEndY);
+    ctx.lineTo(boxCx - 1.4, boxTopY + 0.6);
+    ctx.moveTo(cwEndX, cwEndY);
+    ctx.lineTo(boxCx + 1.4, boxTopY + 0.6);
+    ctx.stroke();
+
+    ctx.fillStyle = '#475569';
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    ctx.moveTo(boxCx - 3.1, boxTopY);
+    ctx.lineTo(boxCx + 3.1, boxTopY);
+    ctx.lineTo(boxCx + 3.7, boxTopY + 6.4);
+    ctx.lineTo(boxCx - 3.7, boxTopY + 6.4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Sunlit oak planks & iron band on counterweight bucket
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(boxCx - 2.4, boxTopY + 1.0, 4.8, 4.4);
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillRect(boxCx - 3.3, boxTopY + 2.8, 6.6, 1.1);
+    ctx.fillStyle = pal.trim;
+    ctx.beginPath();
+    ctx.arc(boxCx, boxTopY + 3.35, 0.85, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tapered seasoned-oak throwing arm beam
+    const perpX = -dirY;
+    const perpY = dirX;
+    ctx.fillStyle = '#92400e';
+    ctx.strokeStyle = '#291811';
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(cwEndX + perpX * 1.8, cwEndY + perpY * 1.8);
+    ctx.lineTo(tipX + perpX * 0.85, tipY + perpY * 0.85);
+    ctx.lineTo(tipX - perpX * 0.85, tipY - perpY * 0.85);
+    ctx.lineTo(cwEndX - perpX * 1.8, cwEndY - perpY * 1.8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = '#fde68a';
+    ctx.lineWidth = 0.85;
+    ctx.beginPath();
+    ctx.moveTo(cwEndX - perpX * 0.9, cwEndY - perpY * 0.9);
+    ctx.lineTo(tipX - perpX * 0.4, tipY - perpY * 0.4);
+    ctx.stroke();
+
+    // Rope sling & loaded quarry boulder (or whipping empty sling right after firing!)
+    const slingLoaded = fireNorm < 0.35;
+    const slingSway = Math.sin(animSec * 3.4 + u.id * 1.7) * 0.9;
+    if (slingLoaded) {
+      const pouchX = tipX - 0.8 + slingSway;
+      const pouchY = tipY + 7.2;
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1.0;
+      ctx.beginPath();
+      ctx.moveTo(tipX - 0.5, tipY);
+      ctx.lineTo(pouchX - 1.5, pouchY);
+      ctx.moveTo(tipX + 0.5, tipY);
+      ctx.lineTo(pouchX + 1.5, pouchY);
+      ctx.stroke();
+
+      // Faceted stone boulder in sling pouch
+      ctx.fillStyle = '#94a3b8';
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.arc(pouchX, pouchY + 1.2, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#f1f5f9';
+      ctx.beginPath();
+      ctx.arc(pouchX - 0.7, pouchY + 0.5, 1.0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const whipX = tipX + 5.6 * releaseSnap + slingSway;
+      const whipY = tipY - 3.2 * releaseSnap + 3.8 * (1 - releaseSnap);
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1.05;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.quadraticCurveTo(tipX + 2.5, tipY + 2.2, whipX, whipY);
+      ctx.moveTo(tipX, tipY);
+      ctx.quadraticCurveTo(tipX + 1.6, tipY + 3.4, whipX - 1.2, whipY + 1.3);
+      ctx.stroke();
+    }
+
+    // 5. Near-side sunlit oak A-frame trestle legs, cross-brace & iron axle boss
+    ctx.strokeStyle = '#291811';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(-7.6, -2.6);
+    ctx.lineTo(axleX, axleY);
+    ctx.lineTo(7.8, -2.6);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#b47b38';
+    ctx.lineWidth = 2.1;
+    ctx.beginPath();
+    ctx.moveTo(-7.6, -2.6);
+    ctx.lineTo(axleX, axleY);
+    ctx.lineTo(7.8, -2.6);
+    ctx.stroke();
+
+    // Horizontal A-frame cross-beam & team heraldic escutcheon
+    ctx.strokeStyle = '#92400e';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(-4.4, -10.2);
+    ctx.lineTo(4.8, -10.2);
+    ctx.stroke();
+
+    ctx.fillStyle = pal.main;
+    ctx.strokeStyle = pal.trim;
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(-1.7, -12.2);
+    ctx.lineTo(2.5, -12.2);
+    ctx.lineTo(2.5, -9.2);
+    ctx.lineTo(0.4, -7.6);
+    ctx.lineTo(-1.7, -9.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Iron axle bearing plate & brass hub
+    ctx.fillStyle = '#cbd5e1';
+    ctx.beginPath();
+    ctx.arc(axleX, axleY, 2.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath();
+    ctx.arc(axleX, axleY, 1.15, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 6. Fluttering Team Siege Pennant atop the A-frame crown!
+    const penPoleX = axleX - 1.2;
+    const penTopY = axleY - 10.2;
+    const penWave = Math.sin(animSec * 5.6 + u.id * 1.3) * 1.8;
+    ctx.strokeStyle = pal.trim;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(penPoleX, axleY - 1.5);
+    ctx.lineTo(penPoleX, penTopY);
+    ctx.stroke();
+
+    ctx.fillStyle = pal.light;
+    ctx.beginPath();
+    ctx.moveTo(penPoleX, penTopY);
+    ctx.quadraticCurveTo(penPoleX - 4.8, penTopY + 1.0 + penWave * 0.5, penPoleX - 9.8, penTopY + 1.6 + penWave);
+    ctx.lineTo(penPoleX - 7.6, penTopY + 3.6 + penWave * 0.7);
+    ctx.lineTo(penPoleX - 9.8, penTopY + 5.6 + penWave);
+    ctx.quadraticCurveTo(penPoleX - 4.8, penTopY + 5.2, penPoleX, penTopY + 5.2);
+    ctx.closePath();
+    ctx.fill();
+
+    // 7. Near-side spoked iron-rimmed oak wheels
+    drawSiegeWheel(-8.8, -2.2, 3.35, false);
+    drawSiegeWheel(8.8, -2.2, 3.35, false);
   }
 
   ctx.restore(); // end facing transform
 
   // 5. Overhead HP bar & Idle Villager '!' badge
-  const topOffset = isMounted ? 31 : 25;
+  const topOffset = isSiege ? 35 : isMounted ? 31 : 25;
   const hpRatio = u.maxHp > 0 ? Math.max(0, Math.min(1, u.hp / u.maxHp)) : 1;
   if (selected || u.hp < u.maxHp || u.kind !== 'villager') {
-    const barW = isMounted ? 20 : 15;
+    const barW = isSiege ? 24 : isMounted ? 20 : 15;
     const barH = selected || u.hp < u.maxHp ? 3.2 : 2.2;
     const by = wy - topOffset - bob;
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
@@ -2447,11 +2875,368 @@ function drawUnit(
   ctx.restore();
 }
 
+function drawMeadowSheep(
+  ctx: CanvasRenderingContext2D,
+  h: WildHorse,
+  animSec: number,
+) {
+  const { wx, wy } = tileToWorld(h.x, h.y);
+  const distToTarget = Math.hypot(h.targetX - h.x, h.targetY - h.y);
+  const isMoving = distToTarget > 0.14;
+  const trot = isMoving ? Math.sin(h.animPhase * 1.65 + animSec * 5.8) : 0;
+  const bob = isMoving ? Math.abs(trot) * 1.15 : 0;
+  const grazeDip = isMoving ? 0 : Math.max(0, Math.sin(animSec * 1.85 + h.id * 2.1));
+  const nibble = !isMoving && grazeDip > 0.6 ? Math.sin(animSec * 10.5 + h.id) * 0.45 : 0;
+
+  ctx.save();
+
+  // Gentle meadow discovery halo when neutral, or subtle team pasture ring when claimed
+  if (h.team === 'neutral') {
+    const shimmer = 0.22 + 0.12 * Math.sin(animSec * 2.8 + h.id * 1.7);
+    ctx.strokeStyle = `rgba(254, 249, 195, ${shimmer.toFixed(2)})`;
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.ellipse(wx, wy + 0.5, 8.6, 4.3, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    ctx.strokeStyle =
+      h.team === 'player' ? 'rgba(96, 165, 250, 0.34)' : 'rgba(248, 113, 113, 0.34)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.ellipse(wx, wy + 0.5, 8.8, 4.4, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Soft elliptical ground shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+  ctx.beginPath();
+  ctx.ellipse(wx, wy + 1, 7.2, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(wx, wy - bob);
+  ctx.scale(h.facing >= 0 ? 1 : -1, 1);
+
+  // Tiny dark charcoal-slate legs
+  ctx.strokeStyle = '#292524';
+  ctx.lineWidth = 1.65;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-3.8, -4.5);
+  ctx.lineTo(-4.3 + trot * 1.9, 0);
+  ctx.moveTo(-1.3, -4.5);
+  ctx.lineTo(-0.9 - trot * 1.7, 0);
+  ctx.moveTo(1.8, -4.5);
+  ctx.lineTo(1.4 + trot * 1.7, 0);
+  ctx.moveTo(4.1, -4.5);
+  ctx.lineTo(4.6 - trot * 1.9, 0);
+  ctx.stroke();
+
+  // Cute fluffy wool tail puff
+  const tailWag = Math.sin(animSec * 4.4 + h.id * 1.9) * 0.45;
+  ctx.fillStyle = '#e7e5e4';
+  ctx.beginPath();
+  ctx.arc(-6.4, -6.6 + tailWag, 1.9, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Soft warm underside fleece shading for 3D volume
+  ctx.fillStyle = '#d6d3d1';
+  ctx.beginPath();
+  ctx.ellipse(0.1, -5.7, 6.8, 3.1, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Fluffy cream-white wool cloud body (3 overlapping soft ellipses + sunlit crown gleam!)
+  ctx.fillStyle = '#f5f5f4';
+  ctx.beginPath();
+  ctx.ellipse(-3.1, -6.9, 4.3, 3.5, -0.1, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#fafaf9';
+  ctx.beginPath();
+  ctx.ellipse(3.4, -6.7, 4.2, 3.4, 0.1, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#fffbeb';
+  ctx.beginPath();
+  ctx.ellipse(0.2, -8.3, 4.9, 3.9, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Sunlit cream-white top highlight & soft wool curl detail
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(-0.2, -9.6, 3.6, 1.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(168, 162, 158, 0.5)';
+  ctx.lineWidth = 0.85;
+  ctx.beginPath();
+  ctx.arc(-1.8, -6.6, 1.7, 0.25, Math.PI * 0.95);
+  ctx.arc(1.9, -6.4, 1.6, 0.2, Math.PI * 0.9);
+  ctx.stroke();
+
+  // Royal-blue / crimson neck ribbon & shepherd bell once claimed!
+  const headX = 6.5 + grazeDip * 1.0;
+  const headY = -7.8 + grazeDip * 3.3 + nibble;
+  if (h.team !== 'neutral') {
+    const ribbonMain = h.team === 'player' ? '#2563eb' : '#dc2626';
+    const ribbonLight = h.team === 'player' ? '#60a5fa' : '#f87171';
+    const flutter = Math.sin(animSec * 5.2 + h.id) * 0.7;
+
+    // Fluttering ribbon tails
+    ctx.strokeStyle = ribbonLight;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(4.5, -8.8 + grazeDip * 1.4);
+    ctx.lineTo(2.4, -10.8 + grazeDip * 1.2 + flutter);
+    ctx.moveTo(4.6, -8.2 + grazeDip * 1.4);
+    ctx.lineTo(2.1, -9.2 + grazeDip * 1.2 - flutter * 0.5);
+    ctx.stroke();
+
+    // Snug neck ribbon collar
+    ctx.strokeStyle = ribbonMain;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(4.4, -9.2 + grazeDip * 1.5);
+    ctx.lineTo(5.6, -4.6 + grazeDip * 1.8);
+    ctx.stroke();
+
+    // Tiny golden shepherd bell
+    ctx.fillStyle = '#fbbf24';
+    ctx.strokeStyle = '#1c1917';
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.arc(5.5, -4.1 + grazeDip * 1.8, 1.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Adorable dark little sheep face, floppy ears & fluffy wool forehead tuft
+  ctx.fillStyle = '#1c1917';
+  ctx.beginPath();
+  ctx.ellipse(headX - 1.8, headY - 0.7, 1.85, 0.8, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#292524';
+  ctx.beginPath();
+  ctx.ellipse(headX + 0.3, headY, 2.55, 2.0, 0.32, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#1c1917';
+  ctx.beginPath();
+  ctx.ellipse(headX - 0.9, headY - 1.1, 1.65, 0.75, -0.25, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Fluffy cream forehead wool cap
+  ctx.fillStyle = '#fffbeb';
+  ctx.beginPath();
+  ctx.ellipse(headX - 0.5, headY - 1.95, 1.85, 1.05, 0.1, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bright little eye glint & soft muzzle tip
+  ctx.fillStyle = '#f8fafc';
+  ctx.beginPath();
+  ctx.arc(headX + 0.85, headY - 0.35, 0.55, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fda4af';
+  ctx.beginPath();
+  ctx.arc(headX + 2.35, headY + 0.65, 0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+
+  if (h.hp !== undefined && h.maxHp !== undefined && h.maxHp > 0 && h.hp < h.maxHp) {
+    const ratio = Math.max(0, Math.min(1, h.hp / h.maxHp));
+    const barW = 15;
+    const by = wy - 18 - bob;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.fillRect(wx - barW / 2 - 0.8, by - 0.8, barW + 1.6, 4.2);
+    ctx.fillStyle = ratio > 0.45 ? '#fbbf24' : '#ef4444';
+    ctx.fillRect(wx - barW / 2, by, barW * ratio, 2.6);
+  }
+
+  ctx.restore();
+}
+
+function drawWildBoar(
+  ctx: CanvasRenderingContext2D,
+  h: WildHorse,
+  animSec: number,
+) {
+  const { wx, wy } = tileToWorld(h.x, h.y);
+  const distToTarget = Math.hypot(h.targetX - h.x, h.targetY - h.y);
+  const isMoving = distToTarget > 0.14;
+  const trot = isMoving ? Math.sin(h.animPhase * 1.75 + animSec * 6.5) : 0;
+  const bob = isMoving ? Math.abs(trot) * 1.3 : Math.sin(animSec * 2.7 + h.id) * 0.3;
+  const rootDip = isMoving ? 0 : Math.max(0, Math.sin(animSec * 2.1 + h.id * 1.7)) * 1.7;
+  const earTwitch = Math.sin(animSec * 8.4 + h.id * 2.9) > 0.68 ? 1.5 : 0;
+
+  ctx.save();
+
+  // Subtle warm-amber hunt ring beneath wild boar
+  const pulse = 0.2 + 0.1 * Math.sin(animSec * 3.2 + h.id);
+  ctx.strokeStyle = `rgba(249, 115, 22, ${pulse.toFixed(2)})`;
+  ctx.lineWidth = 1.15;
+  ctx.beginPath();
+  ctx.ellipse(wx, wy + 0.5, 10.2, 5.0, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Ground shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
+  ctx.beginPath();
+  ctx.ellipse(wx, wy + 1, 9.2, 4.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(wx, wy - bob);
+  ctx.scale(h.facing >= 0 ? 1 : -1, 1);
+
+  // Flicking bristled boar tail
+  const tailFlick = Math.sin(animSec * 6.2 + h.id) * 1.2;
+  ctx.strokeStyle = '#1c1008';
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-7.2, -7.8);
+  ctx.quadraticCurveTo(-9.8, -9.5 + tailFlick * 0.5, -9.2, -11.4 + tailFlick);
+  ctx.stroke();
+
+  // Sturdy dark cloven legs
+  ctx.strokeStyle = '#1c1008';
+  ctx.lineWidth = 2.05;
+  ctx.beginPath();
+  ctx.moveTo(-5.2, -5.0);
+  ctx.lineTo(-6.0 + trot * 2.4, 0);
+  ctx.moveTo(-2.0, -5.0);
+  ctx.lineTo(-1.4 - trot * 2.1, 0);
+  ctx.moveTo(2.6, -5.2);
+  ctx.lineTo(2.0 + trot * 2.1, 0);
+  ctx.moveTo(5.4, -5.2);
+  ctx.lineTo(6.2 - trot * 2.4, 0);
+  ctx.stroke();
+
+  // Bristled dark-umber wild boar body (classic hunched front shoulder + sloped hindquarters)
+  ctx.fillStyle = '#291509';
+  ctx.beginPath();
+  ctx.ellipse(-3.4, -7.2, 5.2, 3.8, 0.12, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#3e2211';
+  ctx.beginPath();
+  ctx.ellipse(1.4, -8.3, 6.4, 4.6, -0.08, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Warm umber-russet flank highlight
+  ctx.fillStyle = '#5c341d';
+  ctx.beginPath();
+  ctx.ellipse(0.4, -8.8, 5.2, 2.3, -0.08, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Jagged dorsal spine bristles along the back ridge!
+  ctx.fillStyle = '#170b04';
+  ctx.beginPath();
+  const spines: ReadonlyArray<readonly [number, number, number]> = [
+    [-5.4, -10.2, 2.2],
+    [-3.1, -11.4, 2.7],
+    [-0.6, -12.4, 3.1],
+    [1.9, -12.7, 3.2],
+    [4.2, -12.1, 2.6],
+  ];
+  for (const [sx, sy, sh] of spines) {
+    ctx.moveTo(sx - 1.3, sy + 0.8);
+    ctx.lineTo(sx - 0.4, sy - sh);
+    ctx.lineTo(sx + 1.3, sy + 0.9);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Wedge head & leathery snout
+  ctx.fillStyle = '#3b1f10';
+  ctx.beginPath();
+  ctx.moveTo(4.6, -11.6);
+  ctx.lineTo(10.6, -7.2 + rootDip);
+  ctx.lineTo(10.4, -4.6 + rootDip);
+  ctx.lineTo(4.4, -4.6);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#7c4a2d';
+  ctx.beginPath();
+  ctx.ellipse(10.5, -5.9 + rootDip, 1.15, 1.55, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Twitching pointed boar ears
+  ctx.fillStyle = '#291509';
+  ctx.beginPath();
+  ctx.moveTo(5.6, -11.2);
+  ctx.lineTo(4.8 - earTwitch * 0.4, -14.2 - earTwitch * 0.5);
+  ctx.lineTo(7.0, -10.8);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#4a2916';
+  ctx.beginPath();
+  ctx.moveTo(4.0, -11.4);
+  ctx.lineTo(3.0 - earTwitch * 0.5, -14.6 - earTwitch * 0.6);
+  ctx.lineTo(5.5, -11.0);
+  ctx.closePath();
+  ctx.fill();
+
+  // Fierce amber eye glint
+  ctx.fillStyle = '#fde047';
+  ctx.beginPath();
+  ctx.arc(7.2, -8.4 + rootDip * 0.45, 0.75, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Curved white-ivory tusks (far tusk + prominent foreground tusk!)
+  ctx.strokeStyle = '#e7e5e4';
+  ctx.lineWidth = 1.35;
+  ctx.beginPath();
+  ctx.moveTo(9.6, -5.8 + rootDip);
+  ctx.quadraticCurveTo(11.6, -6.2 + rootDip, 11.9, -8.5 + rootDip);
+  ctx.stroke();
+
+  ctx.fillStyle = '#fefce8';
+  ctx.strokeStyle = '#1c1917';
+  ctx.lineWidth = 0.75;
+  ctx.beginPath();
+  ctx.moveTo(8.1, -5.2 + rootDip);
+  ctx.quadraticCurveTo(10.8, -5.5 + rootDip, 11.2, -9.2 + rootDip);
+  ctx.quadraticCurveTo(9.8, -6.8 + rootDip, 7.6, -6.2 + rootDip);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+
+  // Overhead HP bar if damaged!
+  if (h.hp !== undefined && h.maxHp !== undefined && h.maxHp > 0 && h.hp < h.maxHp) {
+    const ratio = Math.max(0, Math.min(1, h.hp / h.maxHp));
+    const barW = 19;
+    const barH = 3.0;
+    const by = wy - 21 - bob;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.fillRect(wx - barW / 2 - 0.9, by - 0.9, barW + 1.8, barH + 1.8);
+    ctx.fillStyle = ratio > 0.5 ? '#f59e0b' : '#ef4444';
+    ctx.fillRect(wx - barW / 2, by, barW * ratio, barH);
+  }
+
+  ctx.restore();
+}
+
 function drawWildHorse(
   ctx: CanvasRenderingContext2D,
   h: WildHorse,
   animSec: number,
 ) {
+  if (h.kind === 'sheep') {
+    drawMeadowSheep(ctx, h, animSec);
+    return;
+  }
+  if (h.kind === 'boar') {
+    drawWildBoar(ctx, h, animSec);
+    return;
+  }
+
   const { wx, wy } = tileToWorld(h.x, h.y);
   const distToTarget = Math.hypot(h.targetX - h.x, h.targetY - h.y);
   const isMoving = distToTarget > 0.16;
@@ -2689,6 +3474,7 @@ function drawProjectiles(
   projectiles: Projectile[],
   fog: FogState[],
   mapSize: number,
+  animSec: number,
 ) {
   for (const p of projectiles) {
     const t = Math.max(0, Math.min(1, p.progress));
@@ -2706,14 +3492,113 @@ function drawProjectiles(
     const groundY = start.wy + (end.wy - start.wy) * t;
 
     const span = Math.hypot(end.wx - start.wx, end.wy - start.wy);
-    const arcPeak = Math.min(34, Math.max(10, span * 0.22));
-    const liftStart = p.kind === 'bolt' ? 22 : 13;
-    const liftEnd = 11;
+    const isBoulder = p.kind === 'boulder';
+    const arcPeak = isBoulder
+      ? Math.min(54, Math.max(42, span * 0.3))
+      : Math.min(34, Math.max(10, span * 0.22));
+    const liftStart = isBoulder || p.kind === 'bolt' ? 22 : 13;
+    const liftEnd = isBoulder ? 10 : 11;
     const baseLift = liftStart + (liftEnd - liftStart) * t;
     const arcZ = Math.sin(t * Math.PI) * arcPeak + baseLift;
 
     const px = groundX;
     const py = groundY - arcZ;
+
+    ctx.save();
+    if (isBoulder) {
+      // High-arcing siege boulder: altitude-responsive ground shadow, parabolic smoke/dust trail & spinning faceted stone!
+      const altSin = Math.sin(t * Math.PI);
+      const shScale = 1 - 0.28 * altSin;
+      ctx.fillStyle = `rgba(0, 0, 0, ${(0.36 * shScale).toFixed(2)})`;
+      ctx.beginPath();
+      ctx.ellipse(groundX, groundY, 6.2 * shScale, 3.0 * shScale, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Smoky / quarry-dust trail along the high parabolic arc
+      for (let k = 6; k >= 1; k--) {
+        const u = t - k * 0.036;
+        if (u <= 0) continue;
+        const ux = start.wx + (end.wx - start.wx) * u;
+        const uy = start.wy + (end.wy - start.wy) * u;
+        const uz = Math.sin(u * Math.PI) * arcPeak + (liftStart + (liftEnd - liftStart) * u);
+        const fade = 1 - k / 7;
+        const jitterX = Math.sin(animSec * 9 + p.id * 2.1 + k * 1.7) * (0.9 + k * 0.22);
+        const jitterY = Math.cos(animSec * 8 + p.id * 1.4 + k * 1.9) * (0.7 + k * 0.18);
+        const puffR = 2.0 + (1 - fade) * 3.1;
+
+        ctx.fillStyle =
+          k <= 2
+            ? `rgba(231, 229, 228, ${(0.46 * fade).toFixed(2)})`
+            : `rgba(168, 162, 158, ${(0.38 * fade).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(ux + jitterX, uy - uz + jitterY, puffR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Impact dust ring right before touchdown
+      if (t > 0.86) {
+        const imp = (t - 0.86) / 0.14;
+        ctx.strokeStyle = `rgba(214, 211, 209, ${(0.65 * (1 - imp)).toFixed(2)})`;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.ellipse(end.wx, end.wy, 4 + imp * 13, 2 + imp * 6.5, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Spinning faceted granite siege boulder
+      const spinDir = end.wx >= start.wx ? 1 : -1;
+      const spin = (p.id * 1.9 + t * 15.2 + animSec * 1.8) * spinDir;
+      ctx.translate(px, py);
+      ctx.rotate(spin);
+
+      // Dark granite silhouette polygon
+      ctx.fillStyle = '#475569';
+      ctx.strokeStyle = '#1c1917';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.moveTo(-5.2, -1.2);
+      ctx.lineTo(-2.8, -4.9);
+      ctx.lineTo(2.4, -5.1);
+      ctx.lineTo(5.3, -1.6);
+      ctx.lineTo(4.4, 3.6);
+      ctx.lineTo(-0.6, 5.2);
+      ctx.lineTo(-4.7, 3.1);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Mid ashlar stone facet
+      ctx.fillStyle = '#94a3b8';
+      ctx.beginPath();
+      ctx.moveTo(-4.4, -1.1);
+      ctx.lineTo(-2.5, -4.2);
+      ctx.lineTo(2.1, -4.3);
+      ctx.lineTo(3.8, -0.6);
+      ctx.lineTo(-0.5, 1.8);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sunlit upper limestone crag facet + fracture seam
+      ctx.fillStyle = '#e2e8f0';
+      ctx.beginPath();
+      ctx.moveTo(-2.5, -4.2);
+      ctx.lineTo(1.8, -4.3);
+      ctx.lineTo(0.4, -1.1);
+      ctx.lineTo(-3.2, -0.8);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 0.85;
+      ctx.beginPath();
+      ctx.moveTo(-3.2, -0.8);
+      ctx.lineTo(0.4, -1.1);
+      ctx.lineTo(2.6, 2.8);
+      ctx.stroke();
+
+      ctx.restore();
+      continue;
+    }
 
     // Tangent vector for arrow/bolt orientation
     const dt = 0.04;
@@ -2724,7 +3609,6 @@ function drawProjectiles(
       Math.sin(t2 * Math.PI) * arcPeak + (liftStart + (liftEnd - liftStart) * t2);
     const angle = Math.atan2(gy2 - az2 - py, gx2 - px);
 
-    ctx.save();
     // Subtle ground shadow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
     ctx.beginPath();
@@ -2887,7 +3771,16 @@ function drawPlacementPreview(
     rallyY: placeTy,
     attackTimer: 0,
   };
-  drawBuilding(ctx, ghostBuilding, state.buildings, false, false, animSec, valid ? 0.68 : 0.38);
+  drawBuilding(
+    ctx,
+    ghostBuilding,
+    state.buildings,
+    false,
+    false,
+    animSec,
+    valid ? 0.68 : 0.38,
+    state.ages?.player === 2,
+  );
 
   if (!valid) {
     ctx.strokeStyle = '#fecaca';
@@ -2899,6 +3792,299 @@ function drawPlacementPreview(
     ctx.lineTo(cx - 7, cy - 1);
     ctx.stroke();
   }
+  ctx.restore();
+}
+
+function drawDemolishPreview(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  cam: CameraState,
+  viewportW: number,
+  viewportH: number,
+  rawTileX: number,
+  rawTileY: number,
+  hoverScreen: { sx: number; sy: number } | null,
+  animSec: number,
+) {
+  const htx = Math.floor(rawTileX);
+  const hty = Math.floor(rawTileY);
+
+  const candidates = state.buildings
+    .filter((b) => isPlayerBuildingRemovable(b, state.buildings))
+    .sort((a, b) => b.tileX + b.tileY + b.size - (a.tileX + a.tileY + a.size));
+
+  let targetBuilding: Building | null = null;
+  for (const b of candidates) {
+    const inFootprint =
+      rawTileX >= b.tileX - 0.12 &&
+      rawTileX <= b.tileX + b.size + 0.12 &&
+      rawTileY >= b.tileY - 0.12 &&
+      rawTileY <= b.tileY + b.size + 0.12;
+
+    let inRoofSprite = false;
+    if (!inFootprint && hoverScreen && b.kind !== 'farm') {
+      const centerScreen = tileToScreen(
+        b.tileX + b.size * 0.5,
+        b.tileY + b.size * 0.5,
+        cam,
+        viewportW,
+        viewportH,
+      );
+      const roofH =
+        (b.kind === 'watchtower'
+          ? 42
+          : b.size === 2
+            ? 44
+            : b.kind === 'stone_wall'
+              ? 22
+              : 28) * cam.zoom;
+      const halfBoxW = (b.size === 2 ? 44 : b.kind === 'stone_wall' ? 20 : 24) * cam.zoom;
+      inRoofSprite =
+        Math.abs(hoverScreen.sx - centerScreen.sx) <= halfBoxW &&
+        hoverScreen.sy >= centerScreen.sy - roofH &&
+        hoverScreen.sy <= centerScreen.sy + 14 * cam.zoom;
+    }
+
+    if (inFootprint || inRoofSprite) {
+      targetBuilding = b;
+      break;
+    }
+  }
+
+  ctx.save();
+  if (targetBuilding) {
+    const pulse = 0.72 + 0.28 * Math.sin(animSec * 6.4);
+    for (let dy = 0; dy < targetBuilding.size; dy++) {
+      for (let dx = 0; dx < targetBuilding.size; dx++) {
+        const tPos = tileToWorld(targetBuilding.tileX + dx, targetBuilding.tileY + dy);
+        traceDiamond(ctx, tPos.wx, tPos.wy, 1, 0.8);
+        ctx.fillStyle = `rgba(251, 113, 133, ${(0.32 * pulse).toFixed(2)})`;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(251, 113, 133, ${(0.95 * pulse).toFixed(2)})`;
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
+
+        traceDiamond(ctx, tPos.wx, tPos.wy, 1, -1.2);
+        ctx.strokeStyle = `rgba(251, 191, 36, ${(0.78 * pulse).toFixed(2)})`;
+        ctx.lineWidth = 1.1;
+        ctx.stroke();
+      }
+    }
+
+    // Subtle crisp vector X reticle hovering over the removable building footprint
+    const top = tileToWorld(targetBuilding.tileX, targetBuilding.tileY);
+    const cx = top.wx;
+    const cy = top.wy + (TILE_H / 2) * targetBuilding.size - 10;
+
+    ctx.fillStyle = 'rgba(24, 14, 18, 0.76)';
+    ctx.strokeStyle = `rgba(251, 146, 60, ${(0.9 * pulse).toFixed(2)})`;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 9.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = '#fda4af';
+    ctx.lineWidth = 2.3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - 4.0, cy - 4.0);
+    ctx.lineTo(cx + 4.0, cy + 4.0);
+    ctx.moveTo(cx + 4.0, cy - 4.0);
+    ctx.lineTo(cx - 4.0, cy + 4.0);
+    ctx.stroke();
+  } else if (htx >= 0 && htx < state.mapSize && hty >= 0 && hty < state.mapSize) {
+    const tPos = tileToWorld(htx, hty);
+    ctx.setLineDash([4, 3]);
+    traceDiamond(ctx, tPos.wx, tPos.wy, 1, -1.0);
+    ctx.strokeStyle = 'rgba(251, 146, 60, 0.44)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawMeadowSunlightMotes(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  animSec: number,
+) {
+  ctx.save();
+  const mapSize = state.mapSize;
+  for (let ty = 0; ty < mapSize; ty++) {
+    for (let tx = 0; tx < mapSize; tx++) {
+      const idx = ty * mapSize + tx;
+      if (state.fog[idx] !== 2) continue;
+      const tile = state.tiles[idx];
+      const isForest = tile.kind === 'forest';
+      const isPond = tile.kind === 'fish' || tile.kind === 'water';
+      if (!isForest && !isPond) continue;
+
+      // Deterministically sample sunlit glades & ponds so motes feel airy and uncluttered
+      const seed = tileHash(tx, ty, 401);
+      if (isForest && seed > 0.42) continue;
+      if (tile.kind === 'water' && seed > 0.16) continue;
+
+      const { wx, wy } = tileToWorld(tx + 0.5, ty + 0.5);
+      const moteCount = tile.kind === 'fish' ? 2 : 1;
+      for (let m = 0; m < moteCount; m++) {
+        const phase = (animSec * 0.24 + seed * 3.7 + m * 0.53) % 1;
+        const alpha = Math.sin(phase * Math.PI) * (isForest ? 0.52 : 0.46);
+        if (alpha <= 0.04) continue;
+
+        const ox =
+          (tileHash(tx, ty, 420 + m) - 0.5) * 22 +
+          Math.sin(animSec * 0.9 + tx + ty + m * 2.1) * 4.5;
+        const oy =
+          (isForest ? -13 : -3.5) -
+          phase * (isForest ? 11 : 7) +
+          (tileHash(tx, ty, 440 + m) - 0.5) * 6;
+        const mx = wx + ox;
+        const my = wy + oy;
+
+        ctx.fillStyle = `rgba(251, 191, 36, ${(alpha * 0.34).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(mx, my, 3.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = isPond
+          ? `rgba(254, 249, 195, ${alpha.toFixed(2)})`
+          : `rgba(254, 240, 138, ${alpha.toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(mx, my, 1.35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawAmbientSwallows(
+  ctx: CanvasRenderingContext2D,
+  cam: CameraState,
+  viewportW: number,
+  viewportH: number,
+  animSec: number,
+) {
+  if (viewportW < 40 || viewportH < 40) return;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const spanW = viewportW + 180;
+  const spanH = viewportH + 140;
+  const birds: ReadonlyArray<{
+    speedX: number;
+    speedY: number;
+    offsetX: number;
+    offsetY: number;
+    swayAmp: number;
+    swayFreq: number;
+    wingSpan: number;
+    flapOffset: number;
+  }> = [
+    {
+      speedX: 29,
+      speedY: -7.5,
+      offsetX: 0.18,
+      offsetY: 0.34,
+      swayAmp: 15,
+      swayFreq: 0.52,
+      wingSpan: 6.4,
+      flapOffset: 0.0,
+    },
+    {
+      speedX: 29,
+      speedY: -7.5,
+      offsetX: 0.145,
+      offsetY: 0.385,
+      swayAmp: 15,
+      swayFreq: 0.52,
+      wingSpan: 5.5,
+      flapOffset: 0.24,
+    },
+    {
+      speedX: -24,
+      speedY: 6.2,
+      offsetX: 0.72,
+      offsetY: 0.22,
+      swayAmp: 13,
+      swayFreq: 0.44,
+      wingSpan: 5.9,
+      flapOffset: 0.61,
+    },
+  ];
+
+  for (let i = 0; i < birds.length; i++) {
+    const b = birds[i];
+    const rawX =
+      b.offsetX * spanW + animSec * b.speedX - cam.wx * 0.14;
+    const rawY =
+      b.offsetY * spanH + animSec * b.speedY - cam.wy * 0.14;
+
+    const wrappedX = (((rawX % spanW) + spanW) % spanW) - 90;
+    const baseWrappedY = (((rawY % spanH) + spanH) % spanH) - 70;
+    const sway = Math.sin(animSec * b.swayFreq + i * 2.1) * b.swayAmp;
+    const swayDeriv = Math.cos(animSec * b.swayFreq + i * 2.1) * b.swayAmp * b.swayFreq;
+
+    const sx = wrappedX;
+    const sy = baseWrappedY + sway;
+    if (sx < -40 || sx > viewportW + 40 || sy < -40 || sy > viewportH + 40) continue;
+
+    // Smooth edge fade near viewport borders
+    const edgeDist = Math.min(sx + 40, viewportW + 40 - sx, sy + 40, viewportH + 40 - sy);
+    const edgeFade = Math.max(0, Math.min(1, edgeDist / 55));
+
+    // Natural swallow flight cadence: 2 light wingbeats followed by a serene outstretched thermal glide!
+    const cycle = (animSec * 0.44 + b.flapOffset) % 1;
+    const flap =
+      cycle < 0.42
+        ? Math.sin((cycle / 0.42) * Math.PI * 4) * 0.88
+        : 0.2 + Math.sin(((cycle - 0.42) / 0.58) * Math.PI) * 0.08;
+
+    const heading = Math.atan2(b.speedY + swayDeriv, b.speedX);
+    const ws = b.wingSpan;
+
+    // Faint airy cloud-height shadow below the gliding swallow
+    ctx.fillStyle = `rgba(15, 23, 42, ${(0.11 * edgeFade).toFixed(2)})`;
+    ctx.beginPath();
+    ctx.ellipse(sx + 14, sy + 38, ws * 0.65, ws * 0.28, heading, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(heading);
+
+    const wingSweepBack = -ws * (0.42 + Math.abs(flap) * 0.14);
+    const wingSpanLat = ws * (1 - Math.abs(flap) * 0.16);
+    const midLift = -ws * 0.22 * flap;
+
+    // Dark swallow silhouette under-stroke
+    ctx.strokeStyle = `rgba(24, 33, 47, ${(0.62 * edgeFade).toFixed(2)})`;
+    ctx.lineWidth = 1.65;
+    ctx.beginPath();
+    ctx.moveTo(wingSweepBack, -wingSpanLat);
+    ctx.quadraticCurveTo(ws * 0.08, -wingSpanLat * 0.45 + midLift, ws * 0.22, 0);
+    ctx.quadraticCurveTo(ws * 0.08, wingSpanLat * 0.45 - midLift, wingSweepBack, wingSpanLat);
+    // Tiny forked swallow tail & head beak
+    ctx.moveTo(-ws * 0.52, -1.2);
+    ctx.lineTo(ws * 0.34, 0);
+    ctx.lineTo(-ws * 0.52, 1.2);
+    ctx.stroke();
+
+    // Warm sunlit ivory-gold leading-edge wing glint
+    ctx.strokeStyle = `rgba(254, 249, 195, ${(0.76 * edgeFade).toFixed(2)})`;
+    ctx.lineWidth = 1.05;
+    ctx.beginPath();
+    ctx.moveTo(wingSweepBack + 0.4, -wingSpanLat * 0.92);
+    ctx.quadraticCurveTo(ws * 0.12, -wingSpanLat * 0.42 + midLift, ws * 0.26, 0);
+    ctx.quadraticCurveTo(ws * 0.12, wingSpanLat * 0.42 - midLift, wingSweepBack + 0.4, wingSpanLat * 0.92);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
   ctx.restore();
 }
 
@@ -3078,16 +4264,26 @@ function renderDiamondMinimap(
     mctx.fillRect(mx - r, my - r * 0.8, r * 2, r * 1.6);
   }
 
-  // Wild & Tamed Horses on minimap
+  // Wild & Tamed Fauna (Horses, Sheep, Boars) on minimap
   if (state.horses) {
     for (const h of state.horses) {
+      if (h.hp !== undefined && h.hp <= 0) continue;
       if (h.team !== 'player') {
         const tx = Math.max(0, Math.min(mapSize - 1, Math.floor(h.x)));
         const ty = Math.max(0, Math.min(mapSize - 1, Math.floor(h.y)));
         if (state.fog[ty * mapSize + tx] !== 2) continue;
       }
       const { mx, my } = toMini(h.x, h.y);
-      mctx.fillStyle = h.team === 'player' ? '#93c5fd' : '#fbbf24';
+      mctx.fillStyle =
+        h.team === 'player'
+          ? '#93c5fd'
+          : h.team === 'enemy'
+            ? '#fca5a5'
+            : h.kind === 'sheep'
+              ? '#f8fafc'
+              : h.kind === 'boar'
+                ? '#fb923c'
+                : '#fbbf24';
       mctx.fillRect(mx - 1.1, my - 1.1, 2.2, 2.2);
     }
   }
@@ -3146,11 +4342,13 @@ export function IsoCanvas({
   selectedUnitIds,
   selectedBuildingId,
   placementKind,
+  demolishMode = false,
   onSelectUnits,
   onSelectBuilding,
   onIssueTileOrder,
   onPlaceBuildingAt,
   onCancelPlacement,
+  onDemolishAt,
   showMinimap = true,
   interactive = true,
 }: IsoCanvasProps) {
@@ -3171,6 +4369,8 @@ export function IsoCanvas({
   selectedBuildingIdRef.current = selectedBuildingId;
   const placementKindRef = useRef(placementKind);
   placementKindRef.current = placementKind;
+  const demolishModeRef = useRef(demolishMode);
+  demolishModeRef.current = demolishMode;
   const showMinimapRef = useRef(showMinimap);
   showMinimapRef.current = showMinimap;
   const interactiveRef = useRef(interactive);
@@ -3182,6 +4382,7 @@ export function IsoCanvas({
     onIssueTileOrder,
     onPlaceBuildingAt,
     onCancelPlacement,
+    onDemolishAt,
   });
   callbacksRef.current = {
     onSelectUnits,
@@ -3189,9 +4390,11 @@ export function IsoCanvas({
     onIssueTileOrder,
     onPlaceBuildingAt,
     onCancelPlacement,
+    onDemolishAt,
   };
 
   const hoverTileRef = useRef<{ tileX: number; tileY: number } | null>(null);
+  const hoverScreenRef = useRef<{ sx: number; sy: number } | null>(null);
   const selectionBoxRef = useRef<SelectionBox | null>(null);
   const ripplesRef = useRef<OrderRipple[]>([]);
   const nextRippleIdRef = useRef(1);
@@ -3310,7 +4513,7 @@ export function IsoCanvas({
       if (e.key === 'ArrowRight') arrowKeysRef.current.right = true;
 
       if (e.key === 'Escape') {
-        if (placementKindRef.current !== null) {
+        if (placementKindRef.current !== null || demolishModeRef.current) {
           callbacksRef.current.onCancelPlacement();
         } else if (
           selectedUnitIdsRef.current.length > 0 ||
@@ -3392,15 +4595,16 @@ export function IsoCanvas({
           if (state.fog[uty * state.mapSize + utx] !== 2) continue;
         }
         const { sx: usx, sy: usy } = tileToScreen(u.x, u.y, cam, w, h);
-        const bodyCy = usy - 12 * cam.zoom;
+        const bodyCy = usy - (u.kind === 'trebuchet' ? 15 : 12) * cam.zoom;
+        const extraR = u.kind === 'trebuchet' ? 5 : 0;
         const d = Math.hypot(sx - usx, sy - bodyCy);
         if (u.team === 'player') {
-          if (d <= bestPlayerDist) {
-            bestPlayerDist = d;
+          if (d <= bestPlayerDist + extraR) {
+            bestPlayerDist = Math.min(bestPlayerDist, d);
             hitPlayerUnit = u;
           }
-        } else if (d <= bestEnemyDist) {
-          bestEnemyDist = d;
+        } else if (d <= bestEnemyDist + extraR) {
+          bestEnemyDist = Math.min(bestEnemyDist, d);
           hitEnemyUnit = u;
         }
       }
@@ -3470,7 +4674,7 @@ export function IsoCanvas({
 
       let kind: OrderRipple['kind'] = rippleKind ?? 'move';
       if (!rippleKind) {
-        const hasEnemy =
+        const hasHostileOrBoar =
           state.units.some(
             (u) =>
               u.team === 'enemy' &&
@@ -3486,8 +4690,17 @@ export function IsoCanvas({
               tx < b.tileX + b.size &&
               ty >= b.tileY &&
               ty < b.tileY + b.size,
+          ) ||
+          Boolean(
+            state.horses?.some(
+              (h) =>
+                h.kind === 'boar' &&
+                (h.hp === undefined || h.hp > 0) &&
+                state.fog[Math.floor(h.y) * state.mapSize + Math.floor(h.x)] === 2 &&
+                Math.hypot(h.x - (tx + 0.5), h.y - (ty + 0.5)) <= 1.35,
+            ),
           );
-        kind = hasEnemy ? 'attack' : 'move';
+        kind = hasHostileOrBoar ? 'attack' : 'move';
       }
       spawnRipple(tx, ty, kind);
     };
@@ -3519,6 +4732,7 @@ export function IsoCanvas({
         // Ignore synthetic pointer events without hardware pointerId
       }
       activePointers.set(e.pointerId, { x: sx, y: sy, pointerType: e.pointerType });
+      hoverScreenRef.current = { sx, sy };
       hoverTileRef.current = screenToTile(
         sx,
         sy,
@@ -3558,6 +4772,7 @@ export function IsoCanvas({
       const w = width || 800;
       const h = height || 600;
 
+      hoverScreenRef.current = { sx, sy };
       hoverTileRef.current = screenToTile(sx, sy, cam, w, h);
 
       if (activePointers.has(e.pointerId)) {
@@ -3606,7 +4821,8 @@ export function IsoCanvas({
           gesture.button === 2 ||
           spacePressedRef.current ||
           gesture.pointerType !== 'mouse' ||
-          placementKindRef.current !== null
+          placementKindRef.current !== null ||
+          demolishModeRef.current
         ) {
           gesture.dragMode = 'pan';
         } else if (gesture.button === 0) {
@@ -3699,7 +4915,7 @@ export function IsoCanvas({
 
       // Right-click (Desktop)
       if (g.button === 2) {
-        if (placementKindRef.current !== null) {
+        if (placementKindRef.current !== null || demolishModeRef.current) {
           callbacksRef.current.onCancelPlacement();
           return;
         }
@@ -3725,6 +4941,21 @@ export function IsoCanvas({
         if (canPlaceBuilding(state, 'player', placementKindRef.current, tx, ty)) {
           callbacksRef.current.onPlaceBuildingAt(tx, ty);
           spawnRipple(tx, ty, 'build');
+        }
+        return;
+      }
+
+      // Building Demolish Mode (Left-click / Tap)
+      if (demolishModeRef.current) {
+        if (hitBuilding && isPlayerBuildingRemovable(hitBuilding, state.buildings)) {
+          callbacksRef.current.onDemolishAt?.(hitBuilding.tileX, hitBuilding.tileY);
+          spawnRipple(hitBuilding.tileX, hitBuilding.tileY, 'attack');
+        } else {
+          const tx = Math.floor(tileX);
+          const ty = Math.floor(tileY);
+          if (tx >= 0 && tx < state.mapSize && ty >= 0 && ty < state.mapSize) {
+            callbacksRef.current.onDemolishAt?.(tx, ty);
+          }
         }
         return;
       }
@@ -4032,6 +5263,7 @@ export function IsoCanvas({
 
       if (state.horses) {
         for (const h of state.horses) {
+          if (h.hp !== undefined && h.hp <= 0) continue;
           if (h.team !== 'player') {
             const htx = Math.max(0, Math.min(state.mapSize - 1, Math.floor(h.x)));
             const hty = Math.max(0, Math.min(state.mapSize - 1, Math.floor(h.y)));
@@ -4084,6 +5316,8 @@ export function IsoCanvas({
             item.building.id === selBldId,
             item.twilight,
             animSec,
+            1,
+            state.ages?.[item.building.team] === 2,
           );
         } else if (item.kind === 'horse') {
           drawWildHorse(ctx, item.horse, animSec);
@@ -4098,9 +5332,10 @@ export function IsoCanvas({
         }
       }
 
-      // 5. Monk Golden WOLOLO Faith Beams, Projectiles, Order Ripples, Ghost Breach & Placement Ghost
+      // 5. Monk Golden WOLOLO Faith Beams, Projectiles, Sunlight Motes, Order Ripples, Ghost Breach & Previews
       drawMonkWololoBeams(ctx, state.units, state.fog, state.mapSize, animSec);
-      drawProjectiles(ctx, state.projectiles, state.fog, state.mapSize);
+      drawProjectiles(ctx, state.projectiles, state.fog, state.mapSize, animSec);
+      drawMeadowSunlightMotes(ctx, state, animSec);
       drawOrderRipples(ctx, ripplesRef.current, nowMs);
 
       if (state.ghostBreach) {
@@ -4116,10 +5351,23 @@ export function IsoCanvas({
           placementKindRef.current,
         );
         drawPlacementPreview(ctx, state, placementKindRef.current, tx, ty, animSec);
+      } else if (interactiveRef.current && demolishModeRef.current && hoverTileRef.current) {
+        drawDemolishPreview(
+          ctx,
+          state,
+          cam,
+          w,
+          h,
+          hoverTileRef.current.tileX,
+          hoverTileRef.current.tileY,
+          hoverScreenRef.current,
+          animSec,
+        );
       }
 
-      // 6. Screen-Space Overlays: Floating Callouts & Green Desktop Selection Box
+      // 6. Screen-Space Overlays: Ambient Gliding Swallows, Floating Callouts & Green Desktop Selection Box
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawAmbientSwallows(ctx, cam, w, h, animSec);
       drawFloatingCallouts(ctx, state, cam, w, h);
 
       const box = selectionBoxRef.current;
@@ -4175,7 +5423,7 @@ export function IsoCanvas({
         pointerEvents: interactive ? 'auto' : 'none',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        cursor: !interactive ? 'default' : placementKind ? 'crosshair' : 'default',
+        cursor: !interactive ? 'default' : placementKind || demolishMode ? 'crosshair' : 'default',
       }}
     >
       <canvas

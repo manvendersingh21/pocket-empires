@@ -39,6 +39,11 @@ const REQUIRED_FEATURES = [
   'forge_craft_btn',
   'war_room_archive_play',
   'hud_publish_base_btn',
+  'hud_empire_name_input',
+  'hud_demolish_btn',
+  'hud_raid_destruction_pill',
+  'hud_age_up_btn',
+  'hud_train_trebuchet',
   'hud_resource_ledger',
   'hud_scout_advisor_btn',
   'hud_taunt_btn',
@@ -359,18 +364,29 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       });
     }
 
-    // 2. Raid Players Sheet (Clash-of-Clans community forts)
+    // 2. Raid Players Sheet & Live Raid Destruction Pill
     await loc('home_raid_players_btn').click();
     const raidSheet = page.locator('[data-testid="raid-target-sheet"]');
     await raidSheet.waitFor({ state: 'visible', timeout: 5000 });
-    await page.locator('[data-testid="raid-attack-0"]').waitFor({ state: 'visible', timeout: 5000 });
+    const firstRaidBtn = page.locator('[data-testid="raid-attack-0"]');
+    await firstRaidBtn.waitFor({ state: 'visible', timeout: 5000 });
     if (screenshotsDir && !isMobile) {
       await waitAnimationFrames(page, 2);
       await page.screenshot({
         path: path.join(screenshotsDir, 'desktop-raid-players.png'),
       });
     }
-    await loc('home_raid_players_btn').click();
+    await firstRaidBtn.click();
+    const raidDestructionPill = loc('hud_raid_destruction_pill');
+    await raidDestructionPill.waitFor({ state: 'visible', timeout: 5000 });
+    const raidPillText = (await raidDestructionPill.innerText()).trim();
+    assertCondition(
+      raidPillText.includes('% Destroyed'),
+      `${label}: Expected live Raid Destruction pill text, got "${raidPillText}".`,
+    );
+    await page.locator('[data-testid="hud-settings-btn"]').click();
+    await page.locator('role=button[name="Exit to Main Menu"s]').click();
+    await loc('war_room_play_daily').waitFor({ state: 'visible', timeout: 5000 });
 
     // 3. Settings Drawer -> War Room Ranks & Archive -> Skirmish Forge
     await loc('home_settings_btn').click();
@@ -401,9 +417,38 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
     });
     await loc('settings_close_btn').click();
 
-    // 4. My Base Builder (Farms, Stone Walls, Publish Base)
+    // 4. My Base Builder (Citadel Naming, Demolish 75% Refund, Castle Age II, Trebuchet, Farms, Stone Walls, Publish Base)
     await loc('home_my_base_btn').click();
     await loc('hud_publish_base_btn').waitFor({ state: 'visible', timeout: 5000 });
+    const empireNameInput = loc('hud_empire_name_input');
+    await empireNameInput.waitFor({ state: 'visible', timeout: 5000 });
+    await empireNameInput.fill('Sunlit Pond Keep');
+
+    const demolishBtn = loc('hud_demolish_btn');
+    await demolishBtn.waitFor({ state: 'visible', timeout: 5000 });
+    await demolishBtn.click();
+    assertCondition(
+      (await demolishBtn.getAttribute('aria-pressed')) === 'true',
+      `${label}: Expected hud_demolish_btn aria-pressed="true" after toggle.`,
+    );
+    await demolishBtn.click();
+    assertCondition(
+      (await demolishBtn.getAttribute('aria-pressed')) === 'false',
+      `${label}: Expected hud_demolish_btn aria-pressed="false" after second toggle.`,
+    );
+
+    await loc('hud_age_up_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('hud_age_up_btn').click();
+    const ageBadgeText = (await loc('hud_age_up_btn').innerText()).trim();
+    assertCondition(
+      ageBadgeText.includes('Castle Age II'),
+      `${label}: Expected Castle Age advancement badge "Castle Age II", got "${ageBadgeText}".`,
+    );
+
+    await loc('dock_mode_train').click();
+    await loc('hud_train_trebuchet').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('dock_mode_build').click();
+
     await page.locator('[data-testid="hud-build-farm"]').waitFor({ state: 'visible', timeout: 5000 });
     await page.locator('[data-testid="hud-build-stone_wall"]').waitFor({
       state: 'visible',
@@ -424,6 +469,8 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
 
     // 3. Play Daily — HUD, Onboarding Steps, Speed Toggle, Isometric Canvas & Diamond Minimap
     await loc('hud_resource_ledger').waitFor({ state: 'visible', timeout: 8000 });
+    await loc('hud_age_up_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('hud_train_trebuchet').waitFor({ state: 'visible', timeout: 5000 });
     await loc('minimap_canvas').waitFor({ state: 'visible', timeout: 5000 });
     await loc('hud_scout_advisor_btn').waitFor({ state: 'visible', timeout: 5000 });
     await loc('hud_taunt_btn').waitFor({ state: 'visible', timeout: 5000 });
@@ -501,13 +548,14 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       `${label}: Horizontal HUD overflow (${canvasCheck.docScrollWidth} > ${canvasCheck.docClientWidth} + 1).`,
     );
 
-    // Verify slim Royal Advisor pill and Scout button do not collide with top-right minimap in 2D
+    // Verify slim Royal Advisor pill, Castle Age pill, and Scout button do not collide with top-right minimap in 2D
     const whisperBox = await page.locator('[data-testid="hud-whisper-pill"]').boundingBox();
+    const ageUpBox = await loc('hud_age_up_btn').boundingBox();
     const scoutBtnBox = await loc('hud_scout_advisor_btn').boundingBox();
     const miniBox = await loc('minimap_canvas').boundingBox();
     assertCondition(
-      whisperBox !== null && scoutBtnBox !== null && miniBox !== null,
-      `${label}: Missing boundingBox for Whisper pill, Scout button, or Minimap canvas.`,
+      whisperBox !== null && ageUpBox !== null && scoutBtnBox !== null && miniBox !== null,
+      `${label}: Missing boundingBox for Whisper pill, Age-Up pill, Scout button, or Minimap canvas.`,
     );
     const overlaps2d = (a, b) =>
       a.x < b.x + b.width &&
@@ -515,7 +563,9 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       a.y < b.y + b.height &&
       a.y + a.height > b.y;
     assertCondition(
-      !overlaps2d(whisperBox, miniBox) && !overlaps2d(scoutBtnBox, miniBox),
+      !overlaps2d(whisperBox, miniBox) &&
+        !overlaps2d(ageUpBox, miniBox) &&
+        !overlaps2d(scoutBtnBox, miniBox),
       `${label}: HUD element overlaps Minimap in 2D.`,
     );
 

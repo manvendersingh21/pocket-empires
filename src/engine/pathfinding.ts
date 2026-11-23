@@ -1,4 +1,4 @@
-import type { Building, MapTile } from '../types/rts.js';
+import type { Building, MapTile, Team } from '../types/rts.js';
 
 export function inBounds(x: number, y: number, mapSize: number): boolean {
   return x >= 0 && y >= 0 && x < mapSize && y < mapSize;
@@ -18,6 +18,7 @@ export function buildBlockedGrid(
   buildings: Building[],
   mapSize: number,
   ignoreBuildingId?: number,
+  movingTeam?: Team,
 ): Uint8Array {
   const blocked = new Uint8Array(mapSize * mapSize);
   for (let i = 0; i < tiles.length; i++) {
@@ -25,6 +26,7 @@ export function buildBlockedGrid(
   }
   for (const b of buildings) {
     if (b.hp <= 0 || b.id === ignoreBuildingId || b.kind === 'farm') continue;
+    if (movingTeam !== undefined && b.kind === 'stone_wall' && b.team === movingTeam) continue;
     for (let dy = 0; dy < b.size; dy++) {
       for (let dx = 0; dx < b.size; dx++) {
         const tx = b.tileX + dx;

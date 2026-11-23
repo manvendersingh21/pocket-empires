@@ -35,6 +35,8 @@ const EVENT_COOLDOWN_MS: Record<SoundEventKind, number> = {
   bow_shoot: 85,
   wololo: 340,
   war_horn: 260,
+  age_up: 400,
+  trebuchet_fire: 160,
   victory: 400,
   defeat: 400,
 };
@@ -350,7 +352,7 @@ function scheduleBrassNote(
 }
 
 /* ============================================================================
- * 14 AoE2-Nostalgic Sound Event Patches
+ * 16 AoE2-Nostalgic Sound Event Patches
  * ========================================================================== */
 
 /** 1. 'villager_spawn': Town-bell chime + breathy two-syllable "Shhh-hah!" filtered noise envelope! */
@@ -1001,7 +1003,257 @@ function patchWarHorn(b: AudioBus): void {
   scheduleBell(b, 587.33, t + 0.24, 0.34, 0.14, true);
 }
 
-/** 13. 'victory': Royal medieval brass fanfare + kettledrum & crown chime! */
+/**
+ * 13. 'age_up': Unmistakable AoE2 Castle Age advancement cue —
+ *     deep resonant cathedral bell strike + majestic rising brass horn chord
+ *     (F3 -> C4 -> F4 -> A4 -> C5) with warm golden shimmer!
+ */
+function patchAgeUp(b: AudioBus): void {
+  const t = b.ctx.currentTime;
+
+  // Deep resonant bronze cathedral bell strike (F3 = 174.61 Hz + F4 = 349.23 Hz octave body)
+  scheduleBell(b, 174.61, t, 1.25, 0.24);
+  scheduleBell(b, 349.23, t + 0.008, 0.98, 0.16);
+
+  // Cathedral stone-vault timpani downbeat
+  scheduleTone(b, {
+    freqStart: 116.54,
+    freqEnd: 58.27,
+    start: t,
+    attack: 0.004,
+    duration: 0.28,
+    type: 'sine',
+    gain: 0.24,
+  });
+
+  // Majestic rising F-major brass horn chord: F3 -> C4 -> F4 -> A4 -> C5
+  // Each voice enters in a heraldic cascade and sustains into a radiant full choir
+  const hornChord: Array<[number, number, number, number, number]> = [
+    [174.61, 0.02, 1.12, 0.18, 1350], // F3 foundation
+    [261.63, 0.13, 1.02, 0.17, 1600], // C4 fifth
+    [349.23, 0.24, 0.92, 0.18, 1900], // F4 octave
+    [440.0, 0.35, 0.83, 0.18, 2200], // A4 warm major third
+    [523.25, 0.46, 0.76, 0.22, 2550], // C5 soaring crown fifth
+  ];
+
+  for (const [freq, offset, dur, gain, brightHz] of hornChord) {
+    scheduleBrassNote(b, freq, t + offset, dur, gain, brightHz);
+  }
+
+  // Celebratory upper carillon strike as the full Castle Age chord blooms
+  scheduleBell(b, 523.25, t + 0.46, 0.82, 0.13); // C5 chime
+  scheduleBell(b, 698.46, t + 0.56, 0.78, 0.11); // F5 crown bell
+
+  // Warm golden harmonic shimmer halo (F5 + A5 + C6 + F6)
+  const shimmerNotes: Array<[number, number, number, number]> = [
+    [698.46, 0.45, 0.74, 0.075], // F5
+    [880.0, 0.5, 0.7, 0.065], // A5
+    [1046.5, 0.55, 0.66, 0.06], // C6
+    [1396.91, 0.6, 0.62, 0.045], // F6
+  ];
+  for (const [freq, offset, dur, gain] of shimmerNotes) {
+    scheduleTone(b, {
+      freqStart: freq,
+      start: t + offset,
+      attack: 0.075,
+      duration: dur,
+      type: 'triangle',
+      gain,
+      detuneCents: 4,
+    });
+    scheduleTone(b, {
+      freqStart: freq,
+      start: t + offset,
+      attack: 0.085,
+      duration: dur,
+      type: 'sine',
+      gain: gain * 0.7,
+      detuneCents: -4,
+    });
+  }
+
+  // Sunlit banner / stained-glass airy shimmer swell
+  scheduleNoise(b, {
+    start: t + 0.46,
+    attack: 0.12,
+    duration: 0.62,
+    gain: 0.045,
+    filterType: 'bandpass',
+    freqStart: 2450,
+    freqEnd: 3950,
+    q: 3.4,
+    highpassHz: 1800,
+  });
+}
+
+/**
+ * 14. 'trebuchet_fire': Heavy timber counterweight release thunk-creak +
+ *     deep low-frequency sling WHOOSH sweep + distant boulder impact rumble!
+ */
+function patchTrebuchetFire(b: AudioBus): void {
+  const t = b.ctx.currentTime;
+  const p = jitter(0.04);
+
+  // Stage 1a: Iron trigger-pin release clack + heavy oak counterweight drop THUNK
+  scheduleTone(b, {
+    freqStart: 1380 * p,
+    freqEnd: 760 * p,
+    start: t,
+    attack: 0.002,
+    duration: 0.042,
+    type: 'triangle',
+    gain: 0.1,
+  });
+  scheduleNoise(b, {
+    start: t,
+    attack: 0.002,
+    duration: 0.03,
+    gain: 0.11,
+    filterType: 'bandpass',
+    freqStart: 2350 * p,
+    q: 3.2,
+  });
+
+  // Massive oak beam & 9-ton counterweight chest drop THUNK
+  scheduleTone(b, {
+    freqStart: 134 * p,
+    freqEnd: 42 * p,
+    start: t + 0.018,
+    attack: 0.003,
+    duration: 0.165,
+    type: 'sine',
+    gain: 0.28,
+  });
+  scheduleTone(b, {
+    freqStart: 268 * p,
+    freqEnd: 104 * p,
+    start: t + 0.02,
+    attack: 0.003,
+    duration: 0.115,
+    type: 'triangle',
+    gain: 0.2,
+  });
+  scheduleNoise(b, {
+    start: t + 0.018,
+    attack: 0.003,
+    duration: 0.075,
+    gain: 0.16,
+    filterType: 'bandpass',
+    freqStart: 690 * p,
+    freqEnd: 310 * p,
+    q: 1.8,
+  });
+
+  // Stage 1b: Strained siege-timber axle & taut hemp-rope CREAK
+  scheduleTone(b, {
+    freqStart: 96 * p,
+    freqEnd: 144 * p,
+    start: t + 0.052,
+    attack: 0.018,
+    duration: 0.155,
+    type: 'sawtooth',
+    gain: 0.12,
+    filterType: 'bandpass',
+    filterFreqStart: 520 * p,
+    filterFreqEnd: 780 * p,
+    filterQ: 4.6,
+  });
+  scheduleTone(b, {
+    freqStart: 158 * p,
+    freqEnd: 116 * p,
+    start: t + 0.11,
+    attack: 0.015,
+    duration: 0.125,
+    type: 'sawtooth',
+    gain: 0.09,
+    filterType: 'bandpass',
+    filterFreqStart: 940 * p,
+    filterFreqEnd: 670 * p,
+    filterQ: 5.0,
+  });
+
+  // Stage 2: Deep low-frequency throwing-arm & leather sling WHOOSH sweep
+  scheduleNoise(b, {
+    start: t + 0.135,
+    attack: 0.085,
+    duration: 0.31,
+    gain: 0.28,
+    filterType: 'bandpass',
+    freqStart: 128 * p,
+    freqEnd: 540 * p,
+    q: 1.35,
+  });
+  scheduleTone(b, {
+    freqStart: 66 * p,
+    freqEnd: 168 * p,
+    start: t + 0.145,
+    attack: 0.07,
+    duration: 0.23,
+    type: 'triangle',
+    gain: 0.16,
+    filterType: 'lowpass',
+    filterFreqStart: 220,
+    filterFreqEnd: 420,
+  });
+  // Leather pouch release whip at the apex of the arc
+  scheduleNoise(b, {
+    start: t + 0.275,
+    attack: 0.024,
+    duration: 0.145,
+    gain: 0.17,
+    filterType: 'bandpass',
+    freqStart: 540 * p,
+    freqEnd: 1680 * p,
+    q: 2.1,
+    highpassHz: 260,
+  });
+
+  // Stage 3: Distant boulder-on-masonry impact thump + rolling lowpass earth rumble
+  const tImpact = t + 0.52;
+  scheduleTone(b, {
+    freqStart: 86 * p,
+    freqEnd: 28 * p,
+    start: tImpact,
+    attack: 0.008,
+    duration: 0.38,
+    type: 'sine',
+    gain: 0.24,
+  });
+  scheduleTone(b, {
+    freqStart: 178 * p,
+    freqEnd: 60 * p,
+    start: tImpact + 0.006,
+    attack: 0.005,
+    duration: 0.22,
+    type: 'triangle',
+    gain: 0.14,
+    filterType: 'lowpass',
+    filterFreqStart: 390,
+    filterFreqEnd: 135,
+  });
+  scheduleNoise(b, {
+    start: tImpact + 0.005,
+    attack: 0.035,
+    duration: 0.48,
+    gain: 0.22,
+    filterType: 'lowpass',
+    freqStart: 350 * p,
+    freqEnd: 92 * p,
+    q: 1.15,
+  });
+  scheduleNoise(b, {
+    start: tImpact + 0.055,
+    attack: 0.02,
+    duration: 0.32,
+    gain: 0.11,
+    filterType: 'bandpass',
+    freqStart: 530 * p,
+    freqEnd: 210 * p,
+    q: 1.5,
+  });
+}
+
+/** 15. 'victory': Royal medieval brass fanfare + kettledrum & crown chime! */
 function patchVictory(b: AudioBus): void {
   const t = b.ctx.currentTime;
 
@@ -1041,7 +1293,7 @@ function patchVictory(b: AudioBus): void {
   scheduleBell(b, 1046.5, t + 0.79, 0.62, 0.12);
 }
 
-/** 14. 'defeat': Solemn minor cathedral bell toll + low horn sigh. */
+/** 16. 'defeat': Solemn minor cathedral bell toll + low horn sigh. */
 function patchDefeat(b: AudioBus): void {
   const t = b.ctx.currentTime;
 
@@ -1231,6 +1483,12 @@ export function playSoundEvent(kind: SoundEventKind): void {
         break;
       case 'war_horn':
         patchWarHorn(b);
+        break;
+      case 'age_up':
+        patchAgeUp(b);
+        break;
+      case 'trebuchet_fire':
+        patchTrebuchetFire(b);
         break;
       case 'victory':
         patchVictory(b);

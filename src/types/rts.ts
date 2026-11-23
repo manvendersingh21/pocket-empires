@@ -97,7 +97,8 @@ export type UnitKind =
   | 'pikeman'
   | 'archer'
   | 'knight'
-  | 'monk';
+  | 'monk'
+  | 'trebuchet';
 
 export interface BuildingCostSpec {
   kind: BuildingKind;
@@ -131,6 +132,7 @@ export interface UnitSpec {
   vision: number;
   bonusVs?: 'cavalry' | 'building' | 'infantry';
   bonusMultiplier?: number;
+  requiresCastleAge?: boolean;
   description: string;
 }
 
@@ -191,7 +193,7 @@ export interface Unit {
 export interface Projectile {
   id: number;
   team: Team;
-  kind: 'arrow' | 'bolt' | 'heal';
+  kind: 'arrow' | 'bolt' | 'heal' | 'boulder';
   fromX: number;
   fromY: number;
   toX: number;
@@ -259,6 +261,8 @@ export type SoundEventKind =
   | 'bow_shoot'
   | 'wololo'
   | 'war_horn'
+  | 'age_up'
+  | 'trebuchet_fire'
   | 'victory'
   | 'defeat';
 
@@ -276,15 +280,22 @@ export interface MatchStats {
   tauntsUsed: number;
   cheekyWololo: boolean;
   horsesTamed?: number;
+  sheepHerded?: number;
+  boarsHunted?: number;
   countsByUnit: Partial<Record<UnitKind, number>>;
 }
 
+export type FaunaKind = 'horse' | 'sheep' | 'boar';
+
 export interface WildHorse {
   id: number;
+  kind?: FaunaKind;
   x: number;
   y: number;
   team: Team | 'neutral';
-  coat: 'chestnut' | 'dapple' | 'bay';
+  coat: 'chestnut' | 'dapple' | 'bay' | 'wool' | 'tusk';
+  hp?: number;
+  maxHp?: number;
   facing: number;
   animPhase: number;
   wanderTimer: number;
@@ -317,6 +328,8 @@ export interface GameState {
   spec: SkirmishSpec;
   mode?: GameMode;
   raidTargetOwner?: string;
+  ages?: Record<Team, 1 | 2>;
+  initialEnemyBuildingCount?: number;
   mapSize: number;
   tiles: MapTile[]; // length mapSize * mapSize
   fog: FogState[]; // player fog of war
@@ -794,6 +807,30 @@ export const UNITS: Record<UnitKind, UnitSpec> = {
     vision: 5.2,
     description: 'Heals nearby allies & chants WOLOLO to convert enemy soldiers!',
   },
+  trebuchet: {
+    kind: 'trebuchet',
+    name: 'Trebuchet',
+    shortName: 'Trebuchet',
+    trainedAt: 'watchtower',
+    cost: { wood: 110, gold: 85 },
+    trainTimeSec: 8.5,
+    maxHp: 115,
+    speed: 1.35,
+    damage: 28,
+    range: 7.2,
+    attackCooldownSec: 2.6,
+    vision: 7.5,
+    bonusVs: 'building',
+    bonusMultiplier: 3.2,
+    requiresCastleAge: true,
+    description: 'Castle Age siege engine: outranges Towers & hurls 90-damage boulders to shatter Stone Walls and Keeps!',
+  },
+};
+
+export const CASTLE_AGE_COST: Resources = {
+  wood: 0,
+  food: 180,
+  gold: 100,
 };
 
 export const TAUNTS: TauntDef[] = [

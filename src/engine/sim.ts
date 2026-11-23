@@ -1,5 +1,6 @@
 import {
   BUILDINGS,
+  CASTLE_AGE_COST,
   MAP_SIZE,
   TAUNTS,
   UNITS,
@@ -51,6 +52,26 @@ const WILD_HORSE_MEADOWS: ReadonlyArray<{
   { x: 3.5, y: 6.5, coat: 'chestnut', facing: -1 },
 ];
 
+const FLUFFY_SHEEP_PASTURES: ReadonlyArray<{
+  x: number;
+  y: number;
+  facing: number;
+}> = [
+  { x: 10.5, y: 14.3, facing: -1 },
+  { x: 7.5, y: 15.2, facing: 1 },
+  { x: 5.5, y: 1.7, facing: 1 },
+  { x: 8.5, y: 0.8, facing: -1 },
+];
+
+const WILD_BOAR_CLEARINGS: ReadonlyArray<{
+  x: number;
+  y: number;
+  facing: number;
+}> = [
+  { x: 4.5, y: 10.5, facing: 1 },
+  { x: 11.5, y: 5.5, facing: -1 },
+];
+
 export function tileToResource(kind: TileKind): ResourceKind | null {
   if (kind === 'forest') return 'wood';
   if (kind === 'berry' || kind === 'fish') return 'food';
@@ -62,7 +83,7 @@ export function countTamedHorses(state: GameState, team: Team): number {
   if (!state.horses) return 0;
   let count = 0;
   for (const h of state.horses) {
-    if (h.team === team) count++;
+    if (h.team === team && (h.kind === undefined || h.kind === 'horse')) count++;
   }
   return count;
 }
@@ -111,6 +132,7 @@ export function getEffectiveUnitStats(
   team: Team,
   kind: UnitKind,
   tamedHorses = 0,
+  age: 1 | 2 = 1,
 ) {
   const base = UNITS[kind];
   const civ = team === 'player' ? spec.playerCiv : spec.enemyCiv;
@@ -146,6 +168,13 @@ export function getEffectiveUnitStats(
 
   if (tamedHorses > 0 && (kind === 'scout' || kind === 'knight')) {
     speed *= 1 + Math.min(0.15, tamedHorses * 0.05);
+  }
+
+  if (age === 2 && !base.requiresCastleAge) {
+    maxHp = Math.round(maxHp * 1.15);
+    if (damage > 0) {
+      damage = Math.round(damage * 1.15);
+    }
   }
 
   if (spec.modifier === 'iron_vanguard' && (kind === 'militia' || kind === 'pikeman')) {
@@ -226,7 +255,13 @@ function spawnUnit(
   x: number,
   y: number,
 ): Unit {
-  const st = getEffectiveUnitStats(state.spec, team, kind);
+  const st = getEffectiveUnitStats(
+    state.spec,
+    team,
+    kind,
+    countTamedHorses(state, team),
+    state.ages?.[team] ?? 1,
+  );
   const unit: Unit = {
     id: state.nextId++,
     team,
@@ -283,29 +318,75 @@ function spawnBuilding(
   return building;
 }
 
+function resolveFaunaSpawnCoords(
+  state: GameState,
+  blocked: Uint8Array,
+  rawX: number,
+  rawY: number,
+): { x: number; y: number } {
+  const mx = Math.floor(rawX);
+  const my = Math.floor(rawY);
+  if (inBounds(mx, my, state.mapSize) && blocked[my * state.mapSize + mx] === 0) {
+    return { x: rawX, y: rawY };
+  }
+  const spot = nearestWalkableTile(blocked, state.mapSize, mx, my, rawX, rawY, 1);
+  return spot ? { x: spot.x + 0.5, y: spot.y + 0.5 } : { x: rawX, y: rawY };
+}
+
 function spawnSymmetricWildHorses(state: GameState) {
   const blocked = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
   state.horses = [];
+
   for (const m of WILD_HORSE_MEADOWS) {
-    const mx = Math.floor(m.x);
-    const my = Math.floor(m.y);
-    const spot =
-      inBounds(mx, my, state.mapSize) && blocked[my * state.mapSize + mx] === 0
-        ? { x: mx, y: my }
-        : nearestWalkableTile(blocked, state.mapSize, mx, my, m.x, m.y, 1);
-    const hx = spot ? spot.x + 0.5 : m.x;
-    const hy = spot ? spot.y + 0.5 : m.y;
+    const pos = resolveFaunaSpawnCoords(state, blocked, m.x, m.y);
     state.horses.push({
       id: state.nextId++,
-      x: hx,
-      y: hy,
+      kind: 'horse',
+      x: pos.x,
+      y: pos.y,
       team: 'neutral',
       coat: m.coat,
       facing: m.facing,
       animPhase: (state.nextId * 0.53) % (Math.PI * 2),
       wanderTimer: 1.5 + (state.nextId % 3) * 0.8,
-      targetX: hx,
-      targetY: hy,
+      targetX: pos.x,
+      targetY: pos.y,
+    });
+  }
+
+  for (const s of FLUFFY_SHEEP_PASTURES) {
+    const pos = resolveFaunaSpawnCoords(state, blocked, s.x, s.y);
+    state.horses.push({
+      id: state.nextId++,
+      kind: 'sheep',
+      x: pos.x,
+      y: pos.y,
+      team: 'neutral',
+      coat: 'wool',
+      facing: s.facing,
+      animPhase: (state.nextId * 0.41) % (Math.PI * 2),
+      wanderTimer: 1.8 + (state.nextId % 3) * 0.7,
+      targetX: pos.x,
+      targetY: pos.y,
+    });
+  }
+
+  for (const b of WILD_BOAR_CLEARINGS) {
+    const pos = resolveFaunaSpawnCoords(state, blocked, b.x, b.y);
+    state.horses.push({
+      id: state.nextId++,
+      kind: 'boar',
+      x: pos.x,
+      y: pos.y,
+      team: 'neutral',
+      coat: 'tusk',
+      hp: 55,
+      maxHp: 55,
+      facing: b.facing,
+      animPhase: (state.nextId * 0.67) % (Math.PI * 2),
+      wanderTimer: 2.0 + (state.nextId % 3) * 0.6,
+      targetX: pos.x,
+      targetY: pos.y,
     });
   }
 }
@@ -341,9 +422,10 @@ export function recomputeFog(state: GameState) {
     revealCircle(b.tileX + b.size / 2, b.tileY + b.size / 2, b.built ? v : 3.2);
   }
   const playerHorses = countTamedHorses(state, 'player');
+  const playerAge = state.ages?.player ?? 1;
   for (const u of state.units) {
     if (u.team !== 'player' || u.hp <= 0) continue;
-    const st = getEffectiveUnitStats(state.spec, 'player', u.kind, playerHorses);
+    const st = getEffectiveUnitStats(state.spec, 'player', u.kind, playerHorses, playerAge);
     revealCircle(u.x, u.y, st.vision);
   }
   if (state.horses) {
@@ -370,6 +452,8 @@ function createBlankMatchStats(): GameState['stats'] {
     tauntsUsed: 0,
     cheekyWololo: false,
     horsesTamed: 0,
+    sheepHerded: 0,
+    boarsHunted: 0,
     countsByUnit: {},
   };
 }
@@ -382,6 +466,8 @@ export function createInitialState(spec: SkirmishSpec): GameState {
   const state: GameState = {
     spec,
     mode: 'skirmish',
+    ages: { player: 1, enemy: 1 },
+    initialEnemyBuildingCount: 1,
     mapSize: MAP_SIZE,
     tiles,
     fog,
@@ -410,6 +496,9 @@ export function createInitialState(spec: SkirmishSpec): GameState {
   // Town Centers
   spawnBuilding(state, 'player', 'town_center', PLAYER_TC_POS.x, PLAYER_TC_POS.y, true);
   spawnBuilding(state, 'enemy', 'town_center', ENEMY_TC_POS.x, ENEMY_TC_POS.y, true);
+  state.initialEnemyBuildingCount = state.buildings.filter(
+    (b) => b.team === 'enemy' && b.hp > 0,
+  ).length;
 
   // Player starting villagers: 1 on Wood, 1 on Berries, 1 Idle next to Gold for tactile first order!
   const pv1 = spawnUnit(state, 'player', 'villager', 8.5, 13.5);
@@ -586,6 +675,8 @@ export function createBaseBuilderState(
   const state: GameState = {
     spec,
     mode: 'base_builder',
+    ages: { player: 1, enemy: 1 },
+    initialEnemyBuildingCount: 0,
     mapSize: MAP_SIZE,
     tiles,
     fog,
@@ -740,6 +831,8 @@ export function createPlayerRaidState(
     spec,
     mode: 'raid',
     raidTargetOwner: target.owner,
+    ages: { player: 1, enemy: 1 },
+    initialEnemyBuildingCount: 0,
     mapSize: MAP_SIZE,
     tiles,
     fog,
@@ -802,6 +895,9 @@ export function createPlayerRaidState(
       placeBlueprintBuilding(state, 'enemy', 'town_center', ENEMY_TC_POS.x, ENEMY_TC_POS.y) ??
       spawnBuilding(state, 'enemy', 'town_center', ENEMY_TC_POS.x, ENEMY_TC_POS.y, true);
   }
+  state.initialEnemyBuildingCount = state.buildings.filter(
+    (b) => b.team === 'enemy' && b.hp > 0,
+  ).length;
 
   // Spawn Defender Garrison + 2 base villagers
   const defenderGarrison: UnitKind[] =
@@ -897,6 +993,98 @@ export function cmdPlaceBuilding(
   return b;
 }
 
+export function cmdDemolishBuilding(
+  state: GameState,
+  team: Team,
+  tileX: number,
+  tileY: number,
+): boolean {
+  if (state.outcome !== 'playing') return false;
+  const tx = Math.floor(tileX);
+  const ty = Math.floor(tileY);
+  const idx = state.buildings.findIndex(
+    (b) =>
+      b.team === team &&
+      b.hp > 0 &&
+      b.kind !== 'town_center' &&
+      tx >= b.tileX &&
+      tx < b.tileX + b.size &&
+      ty >= b.tileY &&
+      ty < b.tileY + b.size,
+  );
+  if (idx === -1) return false;
+
+  const target = state.buildings[idx];
+  const cost = getEffectiveBuildingCost(state.spec, team, target.kind);
+  state.resources[team].wood += Math.round(cost.wood * 0.75);
+  state.resources[team].food += Math.round(cost.food * 0.75);
+  state.resources[team].gold += Math.round(cost.gold * 0.75);
+
+  state.buildings.splice(idx, 1);
+  for (const u of state.units) {
+    if (
+      (u.order.type === 'build' || u.order.type === 'attack_building') &&
+      u.order.buildingId === target.id
+    ) {
+      u.order = { type: 'idle' };
+      u.path = [];
+    }
+  }
+
+  addCallout(
+    state,
+    target.tileX + target.size / 2,
+    target.tileY + target.size / 2,
+    'Cleared +Refund',
+    '#93c5fd',
+    1.1,
+  );
+  if (team === 'player') {
+    emitSound(state, 'build_place');
+    recomputeFog(state);
+  }
+  return true;
+}
+
+export function cmdAdvanceAge(state: GameState, team: Team): boolean {
+  if (state.outcome !== 'playing') return false;
+  if (!state.ages) {
+    state.ages = { player: 1, enemy: 1 };
+  }
+  if (state.ages[team] === 2) return false;
+  if (!canAfford(state.resources[team], CASTLE_AGE_COST)) return false;
+
+  spendResources(state.resources[team], CASTLE_AGE_COST);
+  state.ages[team] = 2;
+
+  let calloutX = team === 'player' ? PLAYER_TC_POS.x + 1 : ENEMY_TC_POS.x + 1;
+  let calloutY = team === 'player' ? PLAYER_TC_POS.y + 0.5 : ENEMY_TC_POS.y + 0.5;
+  for (const b of state.buildings) {
+    if (b.team === team && b.hp > 0 && b.kind === 'town_center') {
+      b.maxHp += 250;
+      b.hp += 250;
+      calloutX = b.tileX + b.size / 2;
+      calloutY = b.tileY + 0.4;
+    }
+  }
+
+  const tamed = countTamedHorses(state, team);
+  for (const u of state.units) {
+    if (u.team === team && u.hp > 0) {
+      const nextSt = getEffectiveUnitStats(state.spec, team, u.kind, tamed, 2);
+      if (nextSt.maxHp > u.maxHp) {
+        const hpGain = nextSt.maxHp - u.maxHp;
+        u.maxHp = nextSt.maxHp;
+        u.hp = Math.min(u.maxHp, u.hp + hpGain);
+      }
+    }
+  }
+
+  emitSound(state, 'age_up');
+  addCallout(state, calloutX, calloutY, 'CASTLE AGE REACHED!', '#fde047', 2.4);
+  return true;
+}
+
 export function cmdTrainUnit(
   state: GameState,
   team: Team,
@@ -904,6 +1092,7 @@ export function cmdTrainUnit(
   preferredBuildingId?: number,
 ): boolean {
   if (state.outcome !== 'playing') return false;
+  if (UNITS[kind].requiresCastleAge && (state.ages?.[team] ?? 1) < 2) return false;
   const requiredBuilding = UNITS[kind].trainedAt;
   const producers = state.buildings.filter(
     (b) => b.team === team && b.hp > 0 && b.built && b.kind === requiredBuilding && b.queue.length < 5,
@@ -924,7 +1113,13 @@ export function cmdTrainUnit(
 
   const producer = producers[0];
   spendResources(state.resources[team], cost);
-  const st = getEffectiveUnitStats(state.spec, team, kind);
+  const st = getEffectiveUnitStats(
+    state.spec,
+    team,
+    kind,
+    countTamedHorses(state, team),
+    state.ages?.[team] ?? 1,
+  );
   producer.queue.push({
     unit: kind,
     remainingSec: st.trainTimeSec,
@@ -1130,6 +1325,7 @@ function moveUnitToward(
     unit.team,
     unit.kind,
     countTamedHorses(state, unit.team),
+    state.ages?.[unit.team] ?? 1,
   );
   unit.pathCooldown = Math.max(0, unit.pathCooldown - dt);
 
@@ -1178,7 +1374,13 @@ function distanceToBuilding(x: number, y: number, b: Building): number {
 }
 
 function computeUnitVsUnitDamage(state: GameState, attacker: Unit, target: Unit): number {
-  const st = getEffectiveUnitStats(state.spec, attacker.team, attacker.kind);
+  const st = getEffectiveUnitStats(
+    state.spec,
+    attacker.team,
+    attacker.kind,
+    0,
+    state.ages?.[attacker.team] ?? 1,
+  );
   const spec = UNITS[attacker.kind];
   let dmg = st.damage;
   if (spec.bonusVs === 'cavalry' && (target.kind === 'knight' || target.kind === 'scout')) {
@@ -1191,12 +1393,23 @@ function computeUnitVsUnitDamage(state: GameState, attacker: Unit, target: Unit)
 }
 
 function computeUnitVsBuildingDamage(state: GameState, attacker: Unit): number {
-  const st = getEffectiveUnitStats(state.spec, attacker.team, attacker.kind);
+  const st = getEffectiveUnitStats(
+    state.spec,
+    attacker.team,
+    attacker.kind,
+    0,
+    state.ages?.[attacker.team] ?? 1,
+  );
   const spec = UNITS[attacker.kind];
   let dmg = st.damage;
   if (spec.bonusVs === 'building') {
     dmg *= spec.bonusMultiplier ?? 1;
-    if (state.spec.modifier === 'iron_vanguard') dmg *= 1.15;
+    if (
+      state.spec.modifier === 'iron_vanguard' &&
+      (attacker.kind === 'militia' || attacker.kind === 'pikeman')
+    ) {
+      dmg *= 1.15;
+    }
   }
   if (attacker.kind === 'archer') {
     dmg = Math.max(3, Math.round(dmg * 0.55));
@@ -1280,27 +1493,36 @@ function applyBuildingHit(state: GameState, building: Building, dmg: number) {
 }
 
 function performUnitAttackOnUnit(state: GameState, unit: Unit, target: Unit) {
-  const st = getEffectiveUnitStats(state.spec, unit.team, unit.kind);
+  const st = getEffectiveUnitStats(
+    state.spec,
+    unit.team,
+    unit.kind,
+    0,
+    state.ages?.[unit.team] ?? 1,
+  );
   const dmg = computeUnitVsUnitDamage(state, unit, target);
   unit.attackTimer = st.attackCooldownSec;
   unit.facing = target.x - unit.x - (target.y - unit.y) >= 0 ? 1 : -1;
 
   if (st.range > 1.5) {
+    const isTrebuchet = unit.kind === 'trebuchet';
     const proj: Projectile = {
       id: state.nextId++,
       team: unit.team,
-      kind: 'arrow',
+      kind: isTrebuchet ? 'boulder' : 'arrow',
       fromX: unit.x,
       fromY: unit.y,
       toX: target.x,
       toY: target.y,
       progress: 0,
-      speed: 8.5,
+      speed: isTrebuchet ? 5.2 : 8.5,
       damage: dmg,
       targetUnitId: target.id,
     };
     state.projectiles.push(proj);
-    if (unit.team === 'player') emitSound(state, 'bow_shoot');
+    if (unit.team === 'player') {
+      emitSound(state, isTrebuchet ? 'trebuchet_fire' : 'bow_shoot');
+    }
   } else {
     applyUnitHit(state, target, dmg);
     if (unit.team === 'player') emitSound(state, 'sword_hit');
@@ -1308,7 +1530,13 @@ function performUnitAttackOnUnit(state: GameState, unit: Unit, target: Unit) {
 }
 
 function performUnitAttackOnBuilding(state: GameState, unit: Unit, building: Building) {
-  const st = getEffectiveUnitStats(state.spec, unit.team, unit.kind);
+  const st = getEffectiveUnitStats(
+    state.spec,
+    unit.team,
+    unit.kind,
+    0,
+    state.ages?.[unit.team] ?? 1,
+  );
   const dmg = computeUnitVsBuildingDamage(state, unit);
   unit.attackTimer = st.attackCooldownSec;
   const bx = building.tileX + building.size / 2;
@@ -1316,20 +1544,23 @@ function performUnitAttackOnBuilding(state: GameState, unit: Unit, building: Bui
   unit.facing = bx - unit.x - (by - unit.y) >= 0 ? 1 : -1;
 
   if (st.range > 1.5) {
+    const isTrebuchet = unit.kind === 'trebuchet';
     state.projectiles.push({
       id: state.nextId++,
       team: unit.team,
-      kind: 'arrow',
+      kind: isTrebuchet ? 'boulder' : 'arrow',
       fromX: unit.x,
       fromY: unit.y,
       toX: bx,
       toY: by,
       progress: 0,
-      speed: 8.5,
+      speed: isTrebuchet ? 5.2 : 8.5,
       damage: dmg,
       targetBuildingId: building.id,
     });
-    if (unit.team === 'player') emitSound(state, 'bow_shoot');
+    if (unit.team === 'player') {
+      emitSound(state, isTrebuchet ? 'trebuchet_fire' : 'bow_shoot');
+    }
   } else {
     applyBuildingHit(state, building, dmg);
     if (unit.team === 'player') emitSound(state, 'sword_hit');
@@ -1416,9 +1647,21 @@ function stepEnemyAI(state: GameState) {
     ]);
   }
 
+  // Advance to Castle Age around t >= 95s if the enemy treasury can afford it
+  if ((state.ages?.enemy ?? 1) < 2 && state.timeSec >= 95) {
+    cmdAdvanceAge(state, 'enemy');
+  }
+
   // 3. Train persona units smoothly (capped so matches stay crisp 2-4 min puzzles)
   if (military.length < 9) {
-    if (persona === 'longbow_earl') {
+    if (
+      (state.ages?.enemy ?? 1) >= 2 &&
+      hasKind('watchtower') &&
+      !military.some((u) => u.kind === 'trebuchet') &&
+      cmdTrainUnit(state, 'enemy', 'trebuchet')
+    ) {
+      // Queued siege trebuchet
+    } else if (persona === 'longbow_earl') {
       cmdTrainUnit(state, 'enemy', 'archer') || cmdTrainUnit(state, 'enemy', 'pikeman');
     } else if (persona === 'knight_baron') {
       cmdTrainUnit(state, 'enemy', 'knight') || cmdTrainUnit(state, 'enemy', 'militia');
@@ -1462,52 +1705,185 @@ function stepEnemyAI(state: GameState) {
   }
 }
 
-function stepWildHorses(state: GameState, blocked: Uint8Array, dt: number) {
+function stepWildHorses(
+  state: GameState,
+  blockedNeutral: Uint8Array,
+  blockedForPlayer: Uint8Array,
+  blockedForEnemy: Uint8Array,
+  dt: number,
+) {
   if (!state.horses || state.horses.length === 0) return;
 
-  for (const horse of state.horses) {
-    // Traditional AoE herding/taming when any unit steps within 1.5 tiles
-    if (horse.team === 'neutral') {
-      let tamer: Unit | null = null;
+  let anyBoarSlain = false;
+
+  for (const animal of state.horses) {
+    const faunaKind = animal.kind ?? 'horse';
+
+    // 1. Wild Boar: contested flank big-game hunt (-20 HP/sec per nearby hunter -> +120 Food)
+    if (faunaKind === 'boar') {
+      animal.hp = animal.hp ?? 55;
+      animal.maxHp = animal.maxHp ?? 55;
+
+      let huntingCount = 0;
+      let killerTeam: Team | null = null;
+      let nearestHunterDist = Infinity;
+      for (const u of state.units) {
+        if (u.hp <= 0 || u.kind === 'monk') continue;
+        const d = Math.hypot(u.x - animal.x, u.y - animal.y);
+        if (d <= 1.6) {
+          huntingCount++;
+          if (d < nearestHunterDist) {
+            nearestHunterDist = d;
+            killerTeam = u.team;
+          }
+          const fdx = animal.x - u.x;
+          const fdy = animal.y - u.y;
+          if (Math.abs(fdx - fdy) > 0.02) {
+            u.facing = fdx - fdy >= 0 ? 1 : -1;
+            animal.facing = -u.facing;
+          }
+          u.animPhase += dt * 7;
+        }
+      }
+
+      if (huntingCount > 0 && killerTeam) {
+        animal.hp -= 20 * huntingCount * dt;
+        animal.animPhase += dt * 8.5;
+        animal.wanderTimer = 0.9;
+        animal.targetX = animal.x;
+        animal.targetY = animal.y;
+        if (animal.hp <= 0) {
+          animal.hp = 0;
+          anyBoarSlain = true;
+          state.resources[killerTeam].food += 120;
+          if (killerTeam === 'player') {
+            state.stats.boarsHunted = (state.stats.boarsHunted ?? 0) + 1;
+            state.stats.foodGathered += 120;
+            addCallout(state, animal.x, animal.y - 0.35, 'Boar Hunted! +120 Food', '#fde68a', 1.8);
+            emitSound(state, 'sword_hit');
+          }
+        }
+        continue;
+      }
+
+      animal.wanderTimer -= dt;
+      let home = WILD_BOAR_CLEARINGS[0];
+      let bestHomeDist = Math.hypot(animal.x - home.x, animal.y - home.y);
+      for (let i = 1; i < WILD_BOAR_CLEARINGS.length; i++) {
+        const d = Math.hypot(animal.x - WILD_BOAR_CLEARINGS[i].x, animal.y - WILD_BOAR_CLEARINGS[i].y);
+        if (d < bestHomeDist) {
+          bestHomeDist = d;
+          home = WILD_BOAR_CLEARINGS[i];
+        }
+      }
+
+      if (animal.wanderTimer <= 0) {
+        animal.wanderTimer = 3.0 + ((state.tick + animal.id * 7) % 4) * 0.5;
+        const angle = (state.tick * 0.47 + animal.id * 2.13) % (Math.PI * 2);
+        const radius = 0.25 + ((state.tick + animal.id * 3) % 3) * 0.16;
+        const candX = Math.max(0.5, Math.min(state.mapSize - 0.5, home.x + Math.cos(angle) * radius));
+        const candY = Math.max(0.5, Math.min(state.mapSize - 0.5, home.y + Math.sin(angle) * radius));
+        const ctx = Math.floor(candX);
+        const cty = Math.floor(candY);
+        if (
+          inBounds(ctx, cty, state.mapSize) &&
+          isTileWalkable(state.tiles[cty * state.mapSize + ctx]) &&
+          blockedNeutral[cty * state.mapSize + ctx] === 0 &&
+          Math.hypot(candX - home.x, candY - home.y) <= 0.85
+        ) {
+          animal.targetX = candX;
+          animal.targetY = candY;
+        } else {
+          animal.targetX = home.x;
+          animal.targetY = home.y;
+        }
+      }
+
+      const dx = animal.targetX - animal.x;
+      const dy = animal.targetY - animal.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0.08) {
+        if (Math.abs(dx - dy) > 0.02) {
+          animal.facing = dx - dy >= 0 ? 1 : -1;
+        }
+        const step = Math.min(dist, 0.52 * dt);
+        const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.x + (dx / dist) * step));
+        const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.y + (dy / dist) * step));
+        const ntx = Math.floor(nx);
+        const nty = Math.floor(ny);
+        if (
+          inBounds(ntx, nty, state.mapSize) &&
+          isTileWalkable(state.tiles[nty * state.mapSize + ntx]) &&
+          blockedNeutral[nty * state.mapSize + ntx] === 0
+        ) {
+          animal.x = nx;
+          animal.y = ny;
+          animal.animPhase += dt * 2.6;
+        } else {
+          animal.targetX = animal.x;
+          animal.targetY = animal.y;
+        }
+      }
+      continue;
+    }
+
+    // 2. Traditional AoE herding/taming when any unit steps within 1.5 tiles (Horses & Sheep)
+    if (animal.team === 'neutral') {
+      let claimer: Unit | null = null;
       let bestDist = 1.5;
       for (const u of state.units) {
         if (u.hp <= 0) continue;
-        const d = Math.hypot(u.x - horse.x, u.y - horse.y);
+        const d = Math.hypot(u.x - animal.x, u.y - animal.y);
         if (d <= bestDist) {
           bestDist = d;
-          tamer = u;
+          claimer = u;
         }
       }
-      if (tamer) {
-        horse.team = tamer.team;
-        horse.wanderTimer = 0;
-        state.resources[tamer.team].food += 35;
-        if (tamer.team === 'player') {
-          state.stats.horsesTamed = (state.stats.horsesTamed ?? 0) + 1;
-          state.stats.foodGathered += 35;
-          addCallout(state, horse.x, horse.y - 0.3, 'Horse Tamed! +35 Food', '#fde68a', 1.6);
-          emitSound(state, 'military_spawn');
+      if (claimer) {
+        animal.team = claimer.team;
+        animal.wanderTimer = 0;
+        if (faunaKind === 'sheep') {
+          state.resources[claimer.team].food += 45;
+          if (claimer.team === 'player') {
+            state.stats.sheepHerded = (state.stats.sheepHerded ?? 0) + 1;
+            state.stats.foodGathered += 45;
+            addCallout(state, animal.x, animal.y - 0.3, 'Sheep Herded! +45 Food', '#fde68a', 1.6);
+            emitSound(state, 'villager_spawn');
+          }
+        } else {
+          state.resources[claimer.team].food += 35;
+          if (claimer.team === 'player') {
+            state.stats.horsesTamed = (state.stats.horsesTamed ?? 0) + 1;
+            state.stats.foodGathered += 35;
+            addCallout(state, animal.x, animal.y - 0.3, 'Horse Tamed! +35 Food', '#fde68a', 1.6);
+            emitSound(state, 'military_spawn');
+          }
         }
       }
     }
 
-    horse.wanderTimer -= dt;
+    animal.wanderTimer -= dt;
 
-    if (horse.team === 'neutral') {
-      let home = WILD_HORSE_MEADOWS[0];
-      let bestHomeDist = Math.hypot(horse.x - home.x, horse.y - home.y);
-      for (let i = 1; i < WILD_HORSE_MEADOWS.length; i++) {
-        const d = Math.hypot(horse.x - WILD_HORSE_MEADOWS[i].x, horse.y - WILD_HORSE_MEADOWS[i].y);
+    if (animal.team === 'neutral') {
+      const homeList = faunaKind === 'sheep' ? FLUFFY_SHEEP_PASTURES : WILD_HORSE_MEADOWS;
+      let home = homeList[0];
+      let bestHomeDist = Math.hypot(animal.x - home.x, animal.y - home.y);
+      for (let i = 1; i < homeList.length; i++) {
+        const d = Math.hypot(animal.x - homeList[i].x, animal.y - homeList[i].y);
         if (d < bestHomeDist) {
           bestHomeDist = d;
-          home = WILD_HORSE_MEADOWS[i];
+          home = homeList[i];
         }
       }
 
-      if (horse.wanderTimer <= 0) {
-        horse.wanderTimer = 2.6 + ((state.tick + horse.id * 7) % 5) * 0.45;
-        const angle = (state.tick * 0.63 + horse.id * 2.39996) % (Math.PI * 2);
-        const radius = 0.35 + ((state.tick + horse.id * 3) % 3) * 0.22;
+      const maxRoam = faunaKind === 'sheep' ? 0.25 : 1.45;
+      if (animal.wanderTimer <= 0) {
+        animal.wanderTimer = 2.6 + ((state.tick + animal.id * 7) % 5) * 0.45;
+        const angle = (state.tick * 0.63 + animal.id * 2.39996) % (Math.PI * 2);
+        const radius =
+          faunaKind === 'sheep'
+            ? 0.1 + ((state.tick + animal.id * 3) % 3) * 0.06
+            : 0.35 + ((state.tick + animal.id * 3) % 3) * 0.22;
         const candX = Math.max(0.5, Math.min(state.mapSize - 0.5, home.x + Math.cos(angle) * radius));
         const candY = Math.max(0.5, Math.min(state.mapSize - 0.5, home.y + Math.sin(angle) * radius));
         const ctx = Math.floor(candX);
@@ -1515,101 +1891,107 @@ function stepWildHorses(state: GameState, blocked: Uint8Array, dt: number) {
         if (
           inBounds(ctx, cty, state.mapSize) &&
           state.tiles[cty * state.mapSize + ctx]?.kind === 'grass' &&
-          blocked[cty * state.mapSize + ctx] === 0 &&
-          Math.hypot(candX - home.x, candY - home.y) <= 1.45
+          blockedNeutral[cty * state.mapSize + ctx] === 0 &&
+          Math.hypot(candX - home.x, candY - home.y) <= maxRoam
         ) {
-          horse.targetX = candX;
-          horse.targetY = candY;
+          animal.targetX = candX;
+          animal.targetY = candY;
         } else {
-          horse.targetX = home.x;
-          horse.targetY = home.y;
+          animal.targetX = home.x;
+          animal.targetY = home.y;
         }
       }
 
-      const dx = horse.targetX - horse.x;
-      const dy = horse.targetY - horse.y;
+      const dx = animal.targetX - animal.x;
+      const dy = animal.targetY - animal.y;
       const dist = Math.hypot(dx, dy);
       if (dist > 0.08) {
         if (Math.abs(dx - dy) > 0.02) {
-          horse.facing = dx - dy >= 0 ? 1 : -1;
+          animal.facing = dx - dy >= 0 ? 1 : -1;
         }
-        const step = Math.min(dist, 0.72 * dt);
-        const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.x + (dx / dist) * step));
-        const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.y + (dy / dist) * step));
+        const roamSpeed = faunaKind === 'sheep' ? 0.42 : 0.72;
+        const step = Math.min(dist, roamSpeed * dt);
+        const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.x + (dx / dist) * step));
+        const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.y + (dy / dist) * step));
         const ntx = Math.floor(nx);
         const nty = Math.floor(ny);
         if (
           inBounds(ntx, nty, state.mapSize) &&
           state.tiles[nty * state.mapSize + ntx]?.kind === 'grass' &&
-          blocked[nty * state.mapSize + ntx] === 0
+          blockedNeutral[nty * state.mapSize + ntx] === 0
         ) {
-          horse.x = nx;
-          horse.y = ny;
-          horse.animPhase += dt * 3.2;
+          animal.x = nx;
+          animal.y = ny;
+          animal.animPhase += dt * (faunaKind === 'sheep' ? 2.4 : 3.2);
         } else {
-          horse.targetX = horse.x;
-          horse.targetY = horse.y;
+          animal.targetX = animal.x;
+          animal.targetY = animal.y;
         }
       }
     } else {
-      // Tamed horse: trot back to graze peacefully near friendly Stable (if built) or Town Center
-      const stable = state.buildings.find(
-        (b) => b.team === horse.team && b.hp > 0 && b.built && b.kind === 'stable',
-      );
+      // Claimed fauna: sheep trot gently to Town Center; horses trot to Stable (if built) or Town Center
+      const teamBlocked = animal.team === 'player' ? blockedForPlayer : blockedForEnemy;
+      const stable =
+        faunaKind === 'horse'
+          ? state.buildings.find(
+              (b) => b.team === animal.team && b.hp > 0 && b.built && b.kind === 'stable',
+            )
+          : undefined;
       const homeBld =
         stable ??
         state.buildings.find(
-          (b) => b.team === horse.team && b.hp > 0 && b.kind === 'town_center',
+          (b) => b.team === animal.team && b.hp > 0 && b.kind === 'town_center',
         );
       if (!homeBld) continue;
 
       const anchorX = homeBld.tileX + homeBld.size / 2;
       const anchorY = homeBld.tileY + homeBld.size / 2;
-      const distToAnchor = Math.hypot(horse.x - anchorX, horse.y - anchorY);
+      const distToAnchor = Math.hypot(animal.x - anchorX, animal.y - anchorY);
 
       if (distToAnchor > 2.6) {
-        if (horse.wanderTimer <= 0) {
-          horse.wanderTimer = 0.65;
+        if (animal.wanderTimer <= 0) {
+          animal.wanderTimer = 0.65;
           const path = findPath(
-            blocked,
+            teamBlocked,
             state.mapSize,
-            horse.x,
-            horse.y,
+            animal.x,
+            animal.y,
             homeBld.tileX,
             homeBld.tileY,
             homeBld.size,
           );
           if (path.length > 0) {
-            horse.targetX = path[0].x;
-            horse.targetY = path[0].y;
+            animal.targetX = path[0].x;
+            animal.targetY = path[0].y;
           }
         }
-        const dx = horse.targetX - horse.x;
-        const dy = horse.targetY - horse.y;
+        const dx = animal.targetX - animal.x;
+        const dy = animal.targetY - animal.y;
         const dist = Math.hypot(dx, dy);
         if (dist <= 0.18) {
-          horse.wanderTimer = 0;
+          animal.wanderTimer = 0;
         } else {
           if (Math.abs(dx - dy) > 0.02) {
-            horse.facing = dx - dy >= 0 ? 1 : -1;
+            animal.facing = dx - dy >= 0 ? 1 : -1;
           }
-          const step = Math.min(dist, 2.35 * dt);
-          const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.x + (dx / dist) * step));
-          const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.y + (dy / dist) * step));
+          const trotSpeed = faunaKind === 'sheep' ? 1.75 : 2.35;
+          const step = Math.min(dist, trotSpeed * dt);
+          const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.x + (dx / dist) * step));
+          const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.y + (dy / dist) * step));
           const ntx = Math.floor(nx);
           const nty = Math.floor(ny);
-          if (inBounds(ntx, nty, state.mapSize) && blocked[nty * state.mapSize + ntx] === 0) {
-            horse.x = nx;
-            horse.y = ny;
-            horse.animPhase += dt * 7.5;
+          if (inBounds(ntx, nty, state.mapSize) && teamBlocked[nty * state.mapSize + ntx] === 0) {
+            animal.x = nx;
+            animal.y = ny;
+            animal.animPhase += dt * (faunaKind === 'sheep' ? 5.6 : 7.5);
           } else {
-            horse.wanderTimer = 0;
+            animal.wanderTimer = 0;
           }
         }
       } else {
-        if (horse.wanderTimer <= 0) {
-          horse.wanderTimer = 2.5 + ((state.tick + horse.id * 5) % 4) * 0.5;
-          const angle = (state.tick * 0.51 + horse.id * 1.91) % (Math.PI * 2);
+        if (animal.wanderTimer <= 0) {
+          animal.wanderTimer = 2.5 + ((state.tick + animal.id * 5) % 4) * 0.5;
+          const angle = (state.tick * 0.51 + animal.id * 1.91) % (Math.PI * 2);
           const ringR = homeBld.size * 0.7 + 0.85;
           const gx = Math.max(0.5, Math.min(state.mapSize - 0.5, anchorX + Math.cos(angle) * ringR));
           const gy = Math.max(0.5, Math.min(state.mapSize - 0.5, anchorY + Math.sin(angle) * ringR));
@@ -1618,46 +2000,51 @@ function stepWildHorses(state: GameState, blocked: Uint8Array, dt: number) {
           if (
             inBounds(gtx, gty, state.mapSize) &&
             isTileWalkable(state.tiles[gty * state.mapSize + gtx]) &&
-            blocked[gty * state.mapSize + gtx] === 0
+            blockedNeutral[gty * state.mapSize + gtx] === 0
           ) {
-            horse.targetX = gx;
-            horse.targetY = gy;
+            animal.targetX = gx;
+            animal.targetY = gy;
           } else {
             const near = nearestWalkableTile(
-              blocked,
+              blockedNeutral,
               state.mapSize,
               homeBld.tileX,
               homeBld.tileY,
-              horse.x,
-              horse.y,
+              animal.x,
+              animal.y,
               homeBld.size,
             );
             if (near) {
-              horse.targetX = near.x + 0.5;
-              horse.targetY = near.y + 0.5;
+              animal.targetX = near.x + 0.5;
+              animal.targetY = near.y + 0.5;
             }
           }
         }
-        const dx = horse.targetX - horse.x;
-        const dy = horse.targetY - horse.y;
+        const dx = animal.targetX - animal.x;
+        const dy = animal.targetY - animal.y;
         const dist = Math.hypot(dx, dy);
         if (dist > 0.1) {
           if (Math.abs(dx - dy) > 0.02) {
-            horse.facing = dx - dy >= 0 ? 1 : -1;
+            animal.facing = dx - dy >= 0 ? 1 : -1;
           }
-          const step = Math.min(dist, 0.78 * dt);
-          const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.x + (dx / dist) * step));
-          const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, horse.y + (dy / dist) * step));
+          const grazeSpeed = faunaKind === 'sheep' ? 0.52 : 0.78;
+          const step = Math.min(dist, grazeSpeed * dt);
+          const nx = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.x + (dx / dist) * step));
+          const ny = Math.max(0.3, Math.min(state.mapSize - 0.3, animal.y + (dy / dist) * step));
           const ntx = Math.floor(nx);
           const nty = Math.floor(ny);
-          if (inBounds(ntx, nty, state.mapSize) && blocked[nty * state.mapSize + ntx] === 0) {
-            horse.x = nx;
-            horse.y = ny;
-            horse.animPhase += dt * 3.2;
+          if (inBounds(ntx, nty, state.mapSize) && teamBlocked[nty * state.mapSize + ntx] === 0) {
+            animal.x = nx;
+            animal.y = ny;
+            animal.animPhase += dt * (faunaKind === 'sheep' ? 2.6 : 3.2);
           }
         }
       }
     }
+  }
+
+  if (anyBoarSlain) {
+    state.horses = state.horses.filter((h) => h.kind !== 'boar' || (h.hp ?? 55) > 0);
   }
 }
 
@@ -1666,7 +2053,22 @@ export function stepGame(state: GameState, dt: number) {
   state.timeSec += dt;
   state.tick++;
 
-  const blocked = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
+  const blockedNeutral = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
+  const blockedForPlayer = buildBlockedGrid(
+    state.tiles,
+    state.buildings,
+    state.mapSize,
+    undefined,
+    'player',
+  );
+  const blockedForEnemy = buildBlockedGrid(
+    state.tiles,
+    state.buildings,
+    state.mapSize,
+    undefined,
+    'enemy',
+  );
+  const blockedForTeam = (team: Team) => (team === 'player' ? blockedForPlayer : blockedForEnemy);
 
   // 1. Update buildings: self-assembly progress, farms, training queues, tower/TC arrows
   const buildSpeedMult = state.spec.modifier === 'timber_boom' ? 1.35 : 1.0;
@@ -1724,7 +2126,7 @@ export function stepGame(state: GameState, dt: number) {
       if (head.remainingSec <= 0) {
         b.queue.shift();
         const spawnSpot = findPath(
-          blocked,
+          blockedForTeam(b.team),
           state.mapSize,
           b.tileX + b.size / 2,
           b.tileY + b.size / 2,
@@ -1795,14 +2197,15 @@ export function stepGame(state: GameState, dt: number) {
     }
   }
 
-  // 1b. Update Wild Horses (wandering, AoE herding/taming, and Stable homing)
-  stepWildHorses(state, blocked, dt);
+  // 1b. Update Wild Horses, Fluffy Sheep & Wild Boars
+  stepWildHorses(state, blockedNeutral, blockedForPlayer, blockedForEnemy, dt);
 
   // 2. Update units
   const playerHorses = countTamedHorses(state, 'player');
   const enemyHorses = countTamedHorses(state, 'enemy');
   for (const u of state.units) {
     if (u.hp <= 0) continue;
+    const unitBlocked = blockedForTeam(u.team);
     u.attackTimer = Math.max(0, u.attackTimer - dt);
     u.monkCooldown = Math.max(0, u.monkCooldown - dt);
     const st = getEffectiveUnitStats(
@@ -1810,6 +2213,7 @@ export function stepGame(state: GameState, dt: number) {
       u.team,
       u.kind,
       u.team === 'player' ? playerHorses : enemyHorses,
+      state.ages?.[u.team] ?? 1,
     );
 
     // Monk passive ally healing when not actively converting
@@ -1855,7 +2259,7 @@ export function stepGame(state: GameState, dt: number) {
           if (Math.hypot(enemy.x - u.x, enemy.y - u.y) <= st.range + 0.2) {
             if (u.attackTimer <= 0) performUnitAttackOnUnit(state, u, enemy);
           } else {
-            moveUnitToward(state, blocked, u, enemy.x, enemy.y, dt);
+            moveUnitToward(state, unitBlocked, u, enemy.x, enemy.y, dt);
           }
         } else {
           const enemyBld = findNearestEnemyBuilding(state, u, Math.max(2.6, st.range));
@@ -1871,12 +2275,26 @@ export function stepGame(state: GameState, dt: number) {
       u.convertTargetId = null;
       u.convertProgress = 0;
       if (u.order.attackMove) {
+        // Trebuchets prioritize enemy fortifications within 7.2 range unless threatened at close quarters
+        if (u.kind === 'trebuchet') {
+          const closeThreat = findNearestEnemyUnit(state, u, 3.8);
+          if (closeThreat) {
+            if (u.attackTimer <= 0) performUnitAttackOnUnit(state, u, closeThreat);
+            continue;
+          }
+          const siegeBld = findNearestEnemyBuilding(state, u, st.range + 0.3);
+          if (siegeBld) {
+            if (u.attackTimer <= 0) performUnitAttackOnBuilding(state, u, siegeBld);
+            continue;
+          }
+        }
+
         const nearEnemy = findNearestEnemyUnit(state, u, Math.max(3.8, st.range + 0.4));
         if (nearEnemy) {
           if (Math.hypot(nearEnemy.x - u.x, nearEnemy.y - u.y) <= st.range + 0.2) {
             if (u.attackTimer <= 0) performUnitAttackOnUnit(state, u, nearEnemy);
           } else {
-            moveUnitToward(state, blocked, u, nearEnemy.x, nearEnemy.y, dt);
+            moveUnitToward(state, unitBlocked, u, nearEnemy.x, nearEnemy.y, dt);
           }
           continue;
         }
@@ -1887,7 +2305,7 @@ export function stepGame(state: GameState, dt: number) {
           } else {
             moveUnitToward(
               state,
-              blocked,
+              unitBlocked,
               u,
               nearBld.tileX + nearBld.size / 2,
               nearBld.tileY + nearBld.size / 2,
@@ -1904,7 +2322,7 @@ export function stepGame(state: GameState, dt: number) {
         u.order = { type: 'idle' };
         u.path = [];
       } else {
-        moveUnitToward(state, blocked, u, u.order.tx, u.order.ty, dt);
+        moveUnitToward(state, unitBlocked, u, u.order.tx, u.order.ty, dt);
       }
       continue;
     }
@@ -1943,7 +2361,7 @@ export function stepGame(state: GameState, dt: number) {
           }
         }
       } else {
-        moveUnitToward(state, blocked, u, site.tileX, site.tileY, dt, site.size);
+        moveUnitToward(state, unitBlocked, u, site.tileX, site.tileY, dt, site.size);
       }
       continue;
     }
@@ -1988,7 +2406,7 @@ export function stepGame(state: GameState, dt: number) {
           u.carryKind = null;
           u.path = [];
         } else {
-          moveUnitToward(state, blocked, u, drop.tileX, drop.tileY, dt, drop.size);
+          moveUnitToward(state, unitBlocked, u, drop.tileX, drop.tileY, dt, drop.size);
         }
         continue;
       }
@@ -2036,7 +2454,7 @@ export function stepGame(state: GameState, dt: number) {
           }
         }
       } else {
-        moveUnitToward(state, blocked, u, tileX, tileY, dt, 1);
+        moveUnitToward(state, unitBlocked, u, tileX, tileY, dt, 1);
       }
       continue;
     }
@@ -2052,7 +2470,7 @@ export function stepGame(state: GameState, dt: number) {
       if (d <= st.range + 0.2) {
         if (u.attackTimer <= 0) performUnitAttackOnUnit(state, u, target);
       } else {
-        moveUnitToward(state, blocked, u, target.x, target.y, dt);
+        moveUnitToward(state, unitBlocked, u, target.x, target.y, dt);
       }
       continue;
     }
@@ -2068,7 +2486,19 @@ export function stepGame(state: GameState, dt: number) {
       if (d <= st.range + 0.3) {
         if (u.attackTimer <= 0) performUnitAttackOnBuilding(state, u, target);
       } else {
-        moveUnitToward(state, blocked, u, target.tileX, target.tileY, dt, target.size);
+        moveUnitToward(state, unitBlocked, u, target.tileX, target.tileY, dt, target.size);
+        if (u.path.length === 0 && u.attackTimer <= 0) {
+          const blockingWall = state.buildings.find(
+            (b) =>
+              b.team !== u.team &&
+              b.hp > 0 &&
+              b.kind === 'stone_wall' &&
+              distanceToBuilding(u.x, u.y, b) <= st.range + 0.35,
+          );
+          if (blockingWall) {
+            performUnitAttackOnBuilding(state, u, blockingWall);
+          }
+        }
       }
       continue;
     }
@@ -2124,7 +2554,7 @@ export function stepGame(state: GameState, dt: number) {
       } else {
         u.convertTargetId = null;
         u.convertProgress = 0;
-        moveUnitToward(state, blocked, u, target.x, target.y, dt);
+        moveUnitToward(state, unitBlocked, u, target.x, target.y, dt);
       }
     }
   }
@@ -2133,9 +2563,11 @@ export function stepGame(state: GameState, dt: number) {
   for (let i = 0; i < state.units.length; i++) {
     const a = state.units[i];
     if (a.hp <= 0) continue;
+    const blockedA = blockedForTeam(a.team);
     for (let j = i + 1; j < state.units.length; j++) {
       const b = state.units[j];
       if (b.hp <= 0) continue;
+      const blockedB = blockedForTeam(b.team);
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d = Math.hypot(dx, dy);
@@ -2147,11 +2579,17 @@ export function stepGame(state: GameState, dt: number) {
         const ay = a.y - uy;
         const bx = b.x + ux;
         const by = b.y + uy;
-        if (inBounds(Math.floor(ax), Math.floor(ay), state.mapSize) && !blocked[Math.floor(ay) * state.mapSize + Math.floor(ax)]) {
+        if (
+          inBounds(Math.floor(ax), Math.floor(ay), state.mapSize) &&
+          !blockedA[Math.floor(ay) * state.mapSize + Math.floor(ax)]
+        ) {
           a.x = ax;
           a.y = ay;
         }
-        if (inBounds(Math.floor(bx), Math.floor(by), state.mapSize) && !blocked[Math.floor(by) * state.mapSize + Math.floor(bx)]) {
+        if (
+          inBounds(Math.floor(bx), Math.floor(by), state.mapSize) &&
+          !blockedB[Math.floor(by) * state.mapSize + Math.floor(bx)]
+        ) {
           b.x = bx;
           b.y = by;
         }
@@ -2198,6 +2636,50 @@ export function stepGame(state: GameState, dt: number) {
   }
 }
 
+export interface RaidDestructionSummary {
+  destructionPct: number;
+  raidStars: 0 | 1 | 2 | 3;
+}
+
+export function computeRaidDestruction(state: GameState): RaidDestructionSummary {
+  const livingEnemy = state.buildings.filter((b) => b.team === 'enemy' && b.hp > 0);
+  const initialCount = state.initialEnemyBuildingCount ?? livingEnemy.length;
+  const destroyedCount = Math.max(
+    state.stats.enemyBuildingsRazed,
+    Math.max(0, initialCount - livingEnemy.length),
+  );
+  const totalCount = livingEnemy.length + destroyedCount;
+  if (totalCount <= 0) {
+    return { destructionPct: 0, raidStars: 0 };
+  }
+
+  let damagedUnits = destroyedCount;
+  for (const b of livingEnemy) {
+    const ratio = b.maxHp > 0 ? Math.max(0, Math.min(1, 1 - b.hp / b.maxHp)) : 0;
+    damagedUnits += ratio;
+  }
+
+  const rawPct = Math.max(0, Math.min(100, Math.round((damagedUnits / totalCount) * 100)));
+  const destructionPct = livingEnemy.length > 0 ? Math.min(99, rawPct) : 100;
+
+  const tcRazed =
+    state.outcome === 'victory' || !livingEnemy.some((b) => b.kind === 'town_center');
+  let stars = 0;
+  if (destructionPct >= 50) stars++;
+  if (tcRazed) stars++;
+  if (
+    destructionPct >= 100 ||
+    (tcRazed && Math.round(state.timeSec) <= state.spec.parSec)
+  ) {
+    stars++;
+  }
+
+  return {
+    destructionPct,
+    raidStars: Math.min(3, stars) as 0 | 1 | 2 | 3,
+  };
+}
+
 export interface ScoreSummary {
   victory: boolean;
   crowns: 0 | 1 | 2 | 3;
@@ -2238,6 +2720,9 @@ export function computeScoreSummary(state: GameState): ScoreSummary {
   } else if ((state.stats.countsByUnit.archer ?? 0) >= 4) {
     strategyLabel = 'Yeoman Longbow Volley';
     strategyIcon = '🏹';
+  } else if ((state.stats.countsByUnit.trebuchet ?? 0) >= 1) {
+    strategyLabel = 'Counterweight Siege';
+    strategyIcon = '🏰';
   } else if (victory && t <= 105) {
     strategyLabel = 'Feudal Blitz';
     strategyIcon = '⚡';

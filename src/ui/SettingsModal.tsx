@@ -144,9 +144,9 @@ const SETTINGS_CSS = `
   align-items: center;
   justify-content: center;
   padding: 12px;
-  background: rgba(6, 10, 16, 0.44);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(8, 14, 22, 0.34);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   animation: pe-settings-fade 0.16s ease-out;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: #f8fafc;
@@ -168,14 +168,14 @@ const SETTINGS_CSS = `
   max-height: calc(100dvh - 24px);
   display: flex;
   flex-direction: column;
-  background: rgba(14, 18, 26, 0.68);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(14, 20, 30, 0.60);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 20px;
   box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.62),
-    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    0 24px 60px rgba(0, 0, 0, 0.54),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
   overflow: hidden;
   animation: pe-settings-rise 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
@@ -1163,9 +1163,11 @@ export function SettingsModal({
                       width: '100%',
                       padding: '10px 14px',
                       borderRadius: '11px',
-                      border: '1px solid rgba(255, 240, 190, 0.65)',
-                      background: 'rgba(245, 166, 35, 0.85)',
-                      color: '#171005',
+                      border: '1px solid rgba(254, 240, 138, 0.65)',
+                      background:
+                        'linear-gradient(135deg, rgba(245, 168, 36, 0.72) 0%, rgba(217, 119, 6, 0.62) 100%)',
+                      color: '#fffbeb',
+                      textShadow: '0 1px 2px rgba(20, 12, 4, 0.65)',
                       fontWeight: 900,
                       fontSize: '13px',
                       letterSpacing: '0.04em',

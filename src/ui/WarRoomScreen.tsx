@@ -116,8 +116,8 @@ const HOME_OVERLAY_CSS = `
   overflow: hidden;
   background: radial-gradient(
     circle at 50% 44%,
-    rgba(10, 16, 22, 0.18) 0%,
-    rgba(8, 12, 18, 0.52) 100%
+    rgba(12, 20, 26, 0.08) 0%,
+    rgba(8, 14, 20, 0.36) 100%
   );
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: #f8fafc;
@@ -143,23 +143,23 @@ const HOME_OVERLAY_CSS = `
   width: 40px;
   height: 40px;
   border-radius: 999px;
-  background: rgba(15, 20, 28, 0.45);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(15, 22, 32, 0.36);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.26);
   color: #f8fafc;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   box-shadow:
-    0 6px 20px rgba(0, 0, 0, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    0 6px 20px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 .pe-home-settings-btn:hover {
-  background: rgba(24, 32, 44, 0.62);
-  border-color: rgba(255, 240, 190, 0.5);
+  background: rgba(24, 34, 48, 0.50);
+  border-color: rgba(254, 240, 138, 0.58);
 }
 .pe-home-settings-btn:active {
   transform: scale(0.95);
@@ -177,31 +177,39 @@ const HOME_OVERLAY_CSS = `
   cursor: pointer;
   padding: 14px 18px;
   border-radius: 999px;
-  background: rgba(245, 166, 35, 0.82);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 240, 190, 0.65);
-  color: #160f04;
+  background: linear-gradient(
+    135deg,
+    rgba(245, 168, 36, 0.68) 0%,
+    rgba(217, 119, 6, 0.58) 100%
+  );
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(254, 240, 138, 0.65);
+  color: #fffbeb;
+  text-shadow:
+    0 1px 3px rgba(20, 12, 4, 0.68),
+    0 0 12px rgba(254, 240, 138, 0.22);
   font-weight: 900;
   font-size: 13.5px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   box-shadow:
-    0 10px 28px rgba(245, 166, 35, 0.28),
-    0 4px 14px rgba(0, 0, 0, 0.36),
-    inset 0 1px 0 rgba(255, 252, 232, 0.65);
+    0 10px 28px rgba(245, 168, 36, 0.26),
+    0 4px 14px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 252, 232, 0.55);
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: transform 0.1s ease, filter 0.15s ease, box-shadow 0.15s ease;
+  transition: transform 0.1s ease, filter 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 .pe-home-primary-cta:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.07);
+  border-color: rgba(254, 249, 195, 0.85);
   box-shadow:
-    0 12px 32px rgba(245, 166, 35, 0.4),
-    0 6px 18px rgba(0, 0, 0, 0.42),
-    inset 0 1px 0 rgba(255, 252, 232, 0.8);
+    0 12px 32px rgba(245, 168, 36, 0.38),
+    0 6px 18px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 253, 240, 0.72);
 }
 .pe-home-primary-cta:active {
   transform: translateY(1.5px) scale(0.99);
@@ -211,17 +219,22 @@ const HOME_OVERLAY_CSS = `
   cursor: pointer;
   padding: 12px 16px;
   border-radius: 999px;
-  background: rgba(16, 22, 30, 0.50);
+  background: linear-gradient(
+    135deg,
+    rgba(18, 26, 36, 0.38) 0%,
+    rgba(12, 18, 28, 0.32) 100%
+  );
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.28);
   color: #f8fafc;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.52);
   font-weight: 700;
   font-size: 13px;
   letter-spacing: 0.01em;
   box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    0 8px 24px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.20);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -229,8 +242,12 @@ const HOME_OVERLAY_CSS = `
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 .pe-home-glass-pill-btn:hover {
-  background: rgba(24, 33, 46, 0.64);
-  border-color: rgba(255, 240, 190, 0.45);
+  background: linear-gradient(
+    135deg,
+    rgba(26, 36, 50, 0.50) 0%,
+    rgba(18, 26, 38, 0.44) 100%
+  );
+  border-color: rgba(254, 240, 138, 0.52);
 }
 .pe-home-glass-pill-btn:active {
   transform: translateY(1px) scale(0.99);
@@ -241,14 +258,14 @@ const HOME_OVERLAY_CSS = `
   margin-top: 4px;
   display: flex;
   flex-direction: column;
-  background: rgba(14, 18, 26, 0.68);
+  background: rgba(14, 20, 30, 0.58);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 18px;
   box-shadow:
-    0 18px 44px rgba(0, 0, 0, 0.52),
-    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    0 18px 44px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
   overflow: hidden;
   animation: pe-sheet-rise 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
@@ -257,9 +274,14 @@ const HOME_OVERLAY_CSS = `
   flex-shrink: 0;
   padding: 6px 11px;
   border-radius: 999px;
-  border: 1px solid rgba(253, 224, 71, 0.55);
-  background: rgba(245, 166, 35, 0.82);
-  color: #160f04;
+  border: 1px solid rgba(254, 240, 138, 0.65);
+  background: linear-gradient(
+    135deg,
+    rgba(245, 168, 36, 0.72) 0%,
+    rgba(217, 119, 6, 0.62) 100%
+  );
+  color: #fffbeb;
+  text-shadow: 0 1px 2px rgba(20, 12, 4, 0.65);
   font-size: 11.5px;
   font-weight: 900;
   display: inline-flex;
@@ -355,14 +377,15 @@ export function WarRoomScreen({
               gap: '6px',
               padding: '4px 12px',
               borderRadius: '999px',
-              background: 'rgba(14, 20, 28, 0.44)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255, 255, 255, 0.18)',
+              background: 'rgba(14, 22, 32, 0.34)',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255, 255, 255, 0.24)',
               fontSize: '11.5px',
               fontWeight: 600,
-              color: 'rgba(248, 250, 252, 0.92)',
-              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)',
+              color: 'rgba(248, 250, 252, 0.95)',
+              textShadow: '0 1px 2px rgba(0, 0, 0, 0.5)',
+              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.2)',
               maxWidth: '100%',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
@@ -422,8 +445,8 @@ export function WarRoomScreen({
           style={
             raidSheetOpen
               ? {
-                  background: 'rgba(24, 33, 46, 0.68)',
-                  borderColor: 'rgba(253, 224, 71, 0.5)',
+                  background: 'rgba(24, 34, 48, 0.52)',
+                  borderColor: 'rgba(254, 240, 138, 0.6)',
                 }
               : undefined
           }
