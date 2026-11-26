@@ -2,11 +2,28 @@ import React, { useState } from 'react';
 import {
   BIOMES,
   CIVS,
+  DAILY_MODIFIERS,
+  type DifficultyId,
   type PlayerBaseBlueprint,
   type SkirmishSpec,
 } from '../types/rts.js';
+import {
+  buildRecentWeekLedger,
+  createEmptyCareerProfile,
+  getCareerRankInfo,
+  type CareerProfile,
+} from '../engine/career.js';
+import {
+  generateDailyBounties,
+  type DailyBounty,
+} from '../engine/dailyBounties.js';
+import {
+  buildLiveDailyStandings,
+  formatUtcResetCountdown,
+} from '../engine/leaderboardModel.js';
+import type { HallOfFameEntry } from '../shared/messages.js';
 import { CivCrest, EmpireIcon, stripEmoji } from './EmpireIcons.js';
-import { SettingsModal } from './SettingsModal.js';
+import { SettingsModal, type SettingsTabId } from './SettingsModal.js';
 
 export interface LeaderboardRow {
   username: string;
@@ -31,14 +48,20 @@ export interface WarRoomScreenProps {
   bestScore: number | null;
   rank: number | null;
   leaderboard: LeaderboardRow[];
+  hallOfFame?: HallOfFameEntry[];
   community: CommunityWarStats;
   aiModeLabel: string;
   playerBases?: PlayerBaseBlueprint[];
   hasSavedBase?: boolean;
+  difficulty?: DifficultyId;
+  onSelectDifficulty?: (difficulty: DifficultyId) => void;
+  career?: CareerProfile;
+  dailyBounties?: DailyBounty[];
   onPlayDaily: () => void;
   onOpenMyBase?: () => void;
   onRaidPlayerBase?: (base: PlayerBaseBlueprint) => void;
   onOpenSettings?: () => void;
+  onOpenLeaderboard?: () => void;
   onPlayCustomSpec: (spec: SkirmishSpec) => void;
   onCraftPrompt: (
     prompt: string,
@@ -166,16 +189,123 @@ const HOME_OVERLAY_CSS = `
 }
 .pe-home-center-stack {
   width: 100%;
-  max-width: 340px;
+  max-width: 372px;
+  max-height: calc(100dvh - 24px);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+.pe-habit-card {
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 16px;
+  background: rgba(14, 20, 30, 0.56);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.pe-diff-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 2.5px;
+  border-radius: 10px;
+  background: rgba(8, 12, 18, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.pe-diff-pill {
+  cursor: pointer;
+  padding: 5px 4px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+  transition: all 0.13s ease;
+}
+.pe-diff-pill:hover {
+  color: #ffffff;
+}
+.pe-diff-pill-active {
+  background: rgba(245, 166, 35, 0.24);
+  border-color: rgba(253, 224, 71, 0.52);
+  color: #fef3c7;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.26);
+}
+.pe-bounties-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+.pe-bounty-chip {
+  padding: 5px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pe-bounty-chip-done {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(52, 211, 153, 0.52);
+}
+.pe-week-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+.pe-week-day {
+  cursor: pointer;
+  padding: 4px 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  color: rgba(226, 232, 240, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2.5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.08s ease;
+}
+.pe-week-day:hover {
+  border-color: rgba(253, 224, 71, 0.5);
+  background: rgba(255, 255, 255, 0.1);
+}
+.pe-week-day:active {
+  transform: scale(0.96);
+}
+.pe-week-day-today {
+  border-color: rgba(251, 191, 36, 0.62);
+  background: rgba(245, 166, 35, 0.16);
+  color: #fef3c7;
+}
+.pe-home-secondary-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
 }
 .pe-home-primary-cta {
   width: 100%;
   cursor: pointer;
-  padding: 14px 18px;
+  padding: 12px 16px;
   border-radius: 999px;
   background: linear-gradient(
     135deg,
@@ -217,7 +347,7 @@ const HOME_OVERLAY_CSS = `
 .pe-home-glass-pill-btn {
   width: 100%;
   cursor: pointer;
-  padding: 12px 16px;
+  padding: 10px 12px;
   border-radius: 999px;
   background: linear-gradient(
     135deg,
@@ -253,8 +383,8 @@ const HOME_OVERLAY_CSS = `
   transform: translateY(1px) scale(0.99);
 }
 .pe-raid-sheet {
-  width: min(92vw, 370px);
-  max-height: min(44dvh, 300px);
+  width: min(92vw, 372px);
+  max-height: min(34dvh, 235px);
   margin-top: 4px;
   display: flex;
   flex-direction: column;
@@ -297,30 +427,76 @@ const HOME_OVERLAY_CSS = `
 }
 `;
 
+const DIFFICULTY_OPTIONS: ReadonlyArray<{ id: DifficultyId; label: string; mult: string }> = [
+  { id: 'standard', label: 'Standard', mult: '1×' },
+  { id: 'veteran', label: 'Veteran', mult: '1.2×' },
+  { id: 'imperial', label: 'Imperial', mult: '1.35×' },
+];
+
 export function WarRoomScreen({
   dailySpec,
   streak,
   bestScore,
   rank,
   leaderboard,
+  hallOfFame = [],
   community,
   aiModeLabel,
   playerBases = [],
   hasSavedBase = false,
+  difficulty = 'standard',
+  onSelectDifficulty,
+  career,
+  dailyBounties,
   onPlayDaily,
   onOpenMyBase,
   onRaidPlayerBase,
   onOpenSettings,
+  onOpenLeaderboard,
   onPlayCustomSpec,
   onCraftPrompt,
 }: WarRoomScreenProps) {
   const [raidSheetOpen, setRaidSheetOpen] = useState(false);
   const [fallbackSettingsOpen, setFallbackSettingsOpen] = useState(false);
+  const [fallbackSettingsTab, setFallbackSettingsTab] = useState<SettingsTabId>('settings');
+
+  const careerProfile = career ?? createEmptyCareerProfile();
+  const careerRank = getCareerRankInfo(careerProfile.xp);
+  const bounties = dailyBounties ?? generateDailyBounties(dailySpec);
+  const completedTodayBounties = new Set(careerProfile.days[dailySpec.dateKey]?.bountyIds ?? []);
+  const weekLedger = buildRecentWeekLedger(dailySpec.dateKey, careerProfile);
+  const resetCountdown = formatUtcResetCountdown();
+
+  const localBestRow =
+    bestScore !== null
+      ? {
+          username: 'You',
+          score: bestScore,
+          timeSec: careerProfile.days[dailySpec.dateKey]?.bestTimeSec ?? dailySpec.parSec,
+          crowns: careerProfile.days[dailySpec.dateKey]?.crowns ?? 1,
+          strategy: 'Your Best',
+          wololos: 0,
+        }
+      : null;
+  const liveStandings = buildLiveDailyStandings(dailySpec, leaderboard, localBestRow, rank);
+  const topStanding = liveStandings[0] ?? null;
+
+  const decree = DAILY_MODIFIERS[dailySpec.modifier];
 
   const handleSettingsClick = () => {
     if (onOpenSettings) {
       onOpenSettings();
     } else {
+      setFallbackSettingsTab('settings');
+      setFallbackSettingsOpen(true);
+    }
+  };
+
+  const handleLeaderboardClick = () => {
+    if (onOpenLeaderboard) {
+      onOpenLeaderboard();
+    } else {
+      setFallbackSettingsTab('ranks');
       setFallbackSettingsOpen(true);
     }
   };
@@ -341,27 +517,27 @@ export function WarRoomScreen({
         <SettingsGearSvg size={19} />
       </button>
 
-      {/* Center Airy Stack: Wordmark + 1-line Pill + 3 Translucent Pill Buttons */}
+      {/* Center Airy Stack: Wordmark + Campaign & Bounties Card + Play/Leaderboard/Base Controls */}
       <div className="pe-home-center-stack">
-        {/* Floating Wordmark + Tiny 1-line Daily Pill */}
+        {/* Floating Wordmark + Matchup Pill */}
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '7px',
-            marginBottom: '6px',
+            gap: '5px',
             textAlign: 'center',
+            maxWidth: '100%',
           }}
         >
           <h1
             className="pe-home-serif"
             style={{
               margin: 0,
-              fontSize: 'clamp(25px, 5.5vw, 32px)',
+              fontSize: 'clamp(23px, 5vw, 30px)',
               fontWeight: 900,
               color: '#fef3c7',
-              lineHeight: 1.08,
+              lineHeight: 1.06,
               textShadow:
                 '0 2px 14px rgba(0, 0, 0, 0.78), 0 1px 3px rgba(0, 0, 0, 0.9)',
             }}
@@ -374,18 +550,18 @@ export function WarRoomScreen({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '6px',
-              padding: '4px 12px',
+              gap: '5px',
+              padding: '3.5px 11px',
               borderRadius: '999px',
-              background: 'rgba(14, 22, 32, 0.34)',
+              background: 'rgba(14, 22, 32, 0.42)',
               backdropFilter: 'blur(12px)',
               WebkitBackdropFilter: 'blur(12px)',
               border: '1px solid rgba(255, 255, 255, 0.24)',
-              fontSize: '11.5px',
+              fontSize: '11px',
               fontWeight: 600,
-              color: 'rgba(248, 250, 252, 0.95)',
+              color: 'rgba(248, 250, 252, 0.96)',
               textShadow: '0 1px 2px rgba(0, 0, 0, 0.5)',
-              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.2)',
+              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.22)',
               maxWidth: '100%',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
@@ -394,12 +570,173 @@ export function WarRoomScreen({
           >
             <CivCrest civ={dailySpec.playerCiv} size={13} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {`Daily #${dailySpec.puzzleNumber} · ${dailySpec.mapName}${
-                streak > 0 ? ` · ${streak}d Streak` : ''
-              }`}
+              {`Daily #${dailySpec.puzzleNumber} · ${dailySpec.mapName} vs `}
             </span>
+            <CivCrest civ={dailySpec.enemyCiv} size={13} />
+            <span>{decree.name}</span>
           </div>
         </div>
+
+        {/* Daily Campaign, Career XP, Difficulty, 3 Bounties & 7-Day Crown Calendar Card */}
+        <section className="pe-habit-card pe-home-tabular" aria-label="Daily Campaign and Bounties">
+          {/* Career Rank & Reset Countdown */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+              <EmpireIcon name="medal" size={13} />
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#fde68a', whiteSpace: 'nowrap' }}>
+                Lv.{careerRank.level} {careerRank.title}
+              </span>
+              {streak > 0 && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '2px',
+                    padding: '1px 6px',
+                    borderRadius: '999px',
+                    background: 'rgba(245, 166, 35, 0.2)',
+                    border: '1px solid rgba(253, 224, 71, 0.4)',
+                    fontSize: '9.5px',
+                    fontWeight: 800,
+                    color: '#fef3c7',
+                  }}
+                >
+                  <EmpireIcon name="flame" size={10} />
+                  <span>{streak}d</span>
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'rgba(203, 213, 225, 0.82)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', color: '#fde68a' }}>
+                <EmpireIcon name="crown" size={10} />
+                <span>{careerProfile.totalCrowns}</span>
+              </span>
+              <span>· {resetCountdown}</span>
+            </div>
+          </div>
+
+          <div
+            style={{
+              height: '4px',
+              width: '100%',
+              borderRadius: '999px',
+              background: 'rgba(255, 255, 255, 0.1)',
+              overflow: 'hidden',
+            }}
+            title={`${careerRank.currentXp} XP`}
+          >
+            <div
+              style={{
+                width: `${careerRank.progressPct}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, #f59e0b 0%, #fef08a 100%)',
+                borderRadius: '999px',
+              }}
+            />
+          </div>
+
+          {/* 3-Tier Tactical Difficulty Selector */}
+          <div
+            data-testid="war-room-difficulty-bar"
+            className="pe-diff-bar"
+            role="group"
+            aria-label="Siege Difficulty"
+          >
+            {DIFFICULTY_OPTIONS.map((opt) => {
+              const active = difficulty === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-testid={`war-room-diff-${opt.id}`}
+                  aria-pressed={active}
+                  className={`pe-diff-pill ${active ? 'pe-diff-pill-active' : ''}`}
+                  onClick={() => onSelectDifficulty?.(opt.id)}
+                >
+                  <span>{opt.label}</span>
+                  <span style={{ fontSize: '9.5px', opacity: 0.85, color: active ? '#fde047' : '#cbd5e1' }}>
+                    {opt.mult}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Today's 3 Royal Bounties */}
+          <div data-testid="war-room-bounties" className="pe-bounties-row">
+            {bounties.map((b) => {
+              const done = completedTodayBounties.has(b.id);
+              return (
+                <div
+                  key={b.id}
+                  className={`pe-bounty-chip ${done ? 'pe-bounty-chip-done' : ''}`}
+                  title={`${b.title}: ${b.description} (+${b.bonusScore} pts)`}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '3px' }}>
+                    <EmpireIcon name={b.icon} size={12} />
+                    {done ? (
+                      <EmpireIcon name="check" size={11} />
+                    ) : (
+                      <span style={{ fontSize: '9px', fontWeight: 800, color: '#fde68a' }}>
+                        +{b.bonusScore}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '9.5px',
+                      fontWeight: 800,
+                      color: done ? '#d1fae5' : '#f8fafc',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {b.title}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 7-Day Crown Streak Calendar Strip */}
+          <div data-testid="war-room-week-strip" className="pe-week-strip" role="group" aria-label="7-Day Siege Calendar">
+            {weekLedger.map((day) => (
+              <button
+                key={day.dateKey}
+                type="button"
+                className={`pe-week-day ${day.isToday ? 'pe-week-day-today' : ''}`}
+                title={`Daily #${day.spec.puzzleNumber} (${day.spec.mapName}) — ${day.crowns}/3 Crowns`}
+                onClick={() => {
+                  if (day.isToday) {
+                    onPlayDaily();
+                  } else {
+                    onPlayCustomSpec({ ...day.spec, difficulty, isCustom: true });
+                  }
+                }}
+              >
+                <span>#{day.spec.puzzleNumber}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                  {[1, 2, 3].map((dot) => (
+                    <span
+                      key={dot}
+                      style={{
+                        width: '4.5px',
+                        height: '4.5px',
+                        borderRadius: '50%',
+                        background:
+                          day.crowns >= dot
+                            ? '#fbbf24'
+                            : 'rgba(255, 255, 255, 0.16)',
+                      }}
+                    />
+                  ))}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
 
         {/* Button 1: Primary 1-Tap Play */}
         <button
@@ -412,64 +749,100 @@ export function WarRoomScreen({
           <span>SOUND THE HORN — TAP TO PLAY</span>
         </button>
 
-        {/* Button 2: My Base — Build & Defend */}
+        {/* Button 2: Live 3-League Leaderboard Hub */}
         <button
           type="button"
-          data-testid="home-my-base-btn"
-          className="pe-home-glass-pill-btn"
-          onClick={() => onOpenMyBase?.()}
+          data-testid="home-leaderboard-btn"
+          className="pe-home-glass-pill-btn pe-home-tabular"
+          style={{ justifyContent: 'space-between', padding: '9px 14px' }}
+          onClick={handleLeaderboardClick}
         >
-          <HomeFortSvg size={17} />
-          <span>My Base — Build & Defend</span>
-          {hasSavedBase && (
-            <span
-              style={{
-                width: '7px',
-                height: '7px',
-                borderRadius: '50%',
-                background: '#34d399',
-                boxShadow: '0 0 8px rgba(52, 211, 153, 0.8)',
-                flexShrink: 0,
-              }}
-              title="Stronghold Saved"
-            />
-          )}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+            <EmpireIcon name="trophy" size={15} />
+            <span>Leaderboard · Hall of Fame</span>
+          </span>
+          <span
+            style={{
+              padding: '2px 8px',
+              borderRadius: '999px',
+              background: 'rgba(245, 166, 35, 0.2)',
+              border: '1px solid rgba(253, 224, 71, 0.45)',
+              color: '#fde68a',
+              fontSize: '10.5px',
+              fontWeight: 800,
+              maxWidth: '148px',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {rank !== null
+              ? `Rank #${rank}`
+              : topStanding
+                ? `#1 ${stripEmoji(topStanding.username)}`
+                : 'Top 15'}
+          </span>
         </button>
 
-        {/* Button 3: Raid Players */}
-        <button
-          type="button"
-          data-testid="home-raid-players-btn"
-          aria-expanded={raidSheetOpen}
-          className="pe-home-glass-pill-btn"
-          style={
-            raidSheetOpen
-              ? {
-                  background: 'rgba(24, 34, 48, 0.52)',
-                  borderColor: 'rgba(254, 240, 138, 0.6)',
-                }
-              : undefined
-          }
-          onClick={() => setRaidSheetOpen((prev) => !prev)}
-        >
-          <EmpireIcon name="swords" size={16} />
-          <span>Raid Players</span>
-          {playerBases.length > 0 && (
-            <span
-              className="pe-home-tabular"
-              style={{
-                padding: '1px 7px',
-                borderRadius: '999px',
-                background: 'rgba(255, 255, 255, 0.12)',
-                color: '#fde68a',
-                fontSize: '11px',
-                fontWeight: 800,
-              }}
-            >
-              {playerBases.length}
-            </span>
-          )}
-        </button>
+        {/* Secondary Row: My Base + Raid Players */}
+        <div className="pe-home-secondary-grid">
+          <button
+            type="button"
+            data-testid="home-my-base-btn"
+            className="pe-home-glass-pill-btn"
+            onClick={() => onOpenMyBase?.()}
+          >
+            <HomeFortSvg size={15} />
+            <span>My Base</span>
+            {hasSavedBase && (
+              <span
+                style={{
+                  width: '6.5px',
+                  height: '6.5px',
+                  borderRadius: '50%',
+                  background: '#34d399',
+                  boxShadow: '0 0 8px rgba(52, 211, 153, 0.8)',
+                  flexShrink: 0,
+                }}
+                title="Stronghold Saved"
+              />
+            )}
+          </button>
+
+          <button
+            type="button"
+            data-testid="home-raid-players-btn"
+            aria-expanded={raidSheetOpen}
+            className="pe-home-glass-pill-btn"
+            style={
+              raidSheetOpen
+                ? {
+                    background: 'rgba(24, 34, 48, 0.52)',
+                    borderColor: 'rgba(254, 240, 138, 0.6)',
+                  }
+                : undefined
+            }
+            onClick={() => setRaidSheetOpen((prev) => !prev)}
+          >
+            <EmpireIcon name="swords" size={15} />
+            <span>Raid Players</span>
+            {playerBases.length > 0 && (
+              <span
+                className="pe-home-tabular"
+                style={{
+                  padding: '1px 6px',
+                  borderRadius: '999px',
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  color: '#fde68a',
+                  fontSize: '10.5px',
+                  fontWeight: 800,
+                }}
+              >
+                {playerBases.length}
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Compact Frosted-Glass Raid Target Sheet */}
@@ -661,6 +1034,7 @@ export function WarRoomScreen({
       {!onOpenSettings && fallbackSettingsOpen && (
         <SettingsModal
           open={fallbackSettingsOpen}
+          initialTab={fallbackSettingsTab}
           onClose={() => setFallbackSettingsOpen(false)}
           inMatch={false}
           dailySpec={dailySpec}
@@ -668,8 +1042,12 @@ export function WarRoomScreen({
           bestScore={bestScore}
           rank={rank}
           leaderboard={leaderboard}
+          hallOfFame={hallOfFame}
+          playerBases={playerBases}
+          career={careerProfile}
           community={community}
           aiModeLabel={aiModeLabel}
+          onRaidPlayerBase={onRaidPlayerBase}
           onPlayCustomSpec={onPlayCustomSpec}
           onCraftPrompt={onCraftPrompt}
         />

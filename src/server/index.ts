@@ -9,6 +9,7 @@ import type {
 import {
   EmpireValidationError,
   getDailyWarRoom,
+  getLeaderboardHub,
   getPlayerBase,
   isValidDateKey,
   listPlayerBases,
@@ -124,6 +125,26 @@ const server = createServer(async (req: any, res: any) => {
     } catch (err) {
       console.error('[pocket-empires:server] GET /api/empire/daily failed', err);
       sendJson(res, 500, { error: 'Failed to load Daily War Room' });
+    }
+    return;
+  }
+
+  // GET /api/empire/leaderboard?date=YYYY-MM-DD
+  if (req.method === 'GET' && req.url?.startsWith('/api/empire/leaderboard')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const rawDate = url.searchParams.get('date');
+      const dateKey =
+        rawDate === null || rawDate.trim().length === 0 ? todayUtcDateKey() : rawDate.trim();
+      if (!isValidDateKey(dateKey)) {
+        sendJson(res, 400, { error: 'Invalid date parameter; expected YYYY-MM-DD' });
+        return;
+      }
+      const hub = await getLeaderboardHub(redis, dateKey, context.username ?? undefined);
+      sendJson(res, 200, hub);
+    } catch (err) {
+      console.error('[pocket-empires:server] GET /api/empire/leaderboard failed', err);
+      sendJson(res, 500, { error: 'Failed to load Leaderboard Hub' });
     }
     return;
   }

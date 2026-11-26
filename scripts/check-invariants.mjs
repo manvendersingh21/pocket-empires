@@ -14,6 +14,7 @@
  *   5. ZERO_TOFU_GLYPHS
  *   6. NO_SLOP_COMMENTS_OR_TIMING_HACKS
  *   7. NO_RAW_USE_EFFECT_IN_PRODUCT
+ *   8. DEVVIT_PRODUCTION_CONTRACT
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -353,6 +354,7 @@ export function runInvariantChecks() {
     ZERO_TOFU_GLYPHS: 0,
     NO_SLOP_COMMENTS_OR_TIMING_HACKS: 0,
     NO_RAW_USE_EFFECT_IN_PRODUCT: 0,
+    DEVVIT_PRODUCTION_CONTRACT: 0,
   };
 
   const report = (ruleId, file, line, failed, fix) => {
@@ -651,6 +653,121 @@ export function runInvariantChecks() {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // 8. DEVVIT_PRODUCTION_CONTRACT
+  //    Verifies devvit.json entrypoints, permissions, trigger/menu endpoints in
+  //    src/server/index.ts, and client+engine typecheck wiring in package.json.
+  // -------------------------------------------------------------------------
+  const devvitPath = path.join(REPO_ROOT, 'devvit.json');
+  const pkgPath = path.join(REPO_ROOT, 'package.json');
+  const serverIndexPath = path.join(REPO_ROOT, 'src', 'server', 'index.ts');
+  stats.DEVVIT_PRODUCTION_CONTRACT = 3;
+
+  if (!existsSync(devvitPath)) {
+    report(
+      'DEVVIT_PRODUCTION_CONTRACT',
+      'devvit.json',
+      1,
+      'Missing devvit.json deployment manifest',
+      'Restore devvit.json configured with splash.html, game.html, server index.cjs, and redis/reddit permissions.',
+    );
+  } else {
+    try {
+      const devvit = JSON.parse(readFileSync(devvitPath, 'utf8'));
+      const serverSrc = existsSync(serverIndexPath) ? readFileSync(serverIndexPath, 'utf8') : '';
+      if (devvit?.post?.entrypoints?.default?.entry !== 'splash.html') {
+        report(
+          'DEVVIT_PRODUCTION_CONTRACT',
+          'devvit.json',
+          1,
+          'post.entrypoints.default.entry must be "splash.html"',
+          'Set post.entrypoints.default.entry to "splash.html" in devvit.json.',
+        );
+      }
+      if (devvit?.post?.entrypoints?.game?.entry !== 'game.html') {
+        report(
+          'DEVVIT_PRODUCTION_CONTRACT',
+          'devvit.json',
+          1,
+          'post.entrypoints.game.entry must be "game.html"',
+          'Set post.entrypoints.game.entry to "game.html" in devvit.json.',
+        );
+      }
+      if (devvit?.server?.entry !== 'index.cjs') {
+        report(
+          'DEVVIT_PRODUCTION_CONTRACT',
+          'devvit.json',
+          1,
+          'server.entry must be "index.cjs"',
+          'Set server.entry to "index.cjs" matching npm run build:server output.',
+        );
+      }
+      if (devvit?.permissions?.redis !== true || devvit?.permissions?.reddit !== true) {
+        report(
+          'DEVVIT_PRODUCTION_CONTRACT',
+          'devvit.json',
+          1,
+          'permissions.redis and permissions.reddit must both be true',
+          'Enable redis and reddit permissions in devvit.json for leaderboards, comments, and user flair.',
+        );
+      }
+      const endpoints = [];
+      if (Array.isArray(devvit?.menu?.items)) {
+        for (const item of devvit.menu.items) {
+          if (typeof item?.endpoint === 'string') endpoints.push(item.endpoint);
+        }
+      }
+      if (devvit?.triggers && typeof devvit.triggers === 'object') {
+        for (const ep of Object.values(devvit.triggers)) {
+          if (typeof ep === 'string') endpoints.push(ep);
+        }
+      }
+      for (const ep of endpoints) {
+        if (!serverSrc.includes(ep)) {
+          report(
+            'DEVVIT_PRODUCTION_CONTRACT',
+            'src/server/index.ts',
+            1,
+            `Devvit endpoint "${ep}" declared in devvit.json is missing from src/server/index.ts`,
+            `Implement route handler for "${ep}" in src/server/index.ts.`,
+          );
+        }
+      }
+    } catch (err) {
+      report(
+        'DEVVIT_PRODUCTION_CONTRACT',
+        'devvit.json',
+        1,
+        `Invalid JSON in devvit.json: ${String(err)}`,
+        'Fix JSON syntax in devvit.json.',
+      );
+    }
+  }
+
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+      const tc = pkg?.scripts?.typecheck;
+      if (typeof tc !== 'string' || !tc.includes('src/client/tsconfig.json')) {
+        report(
+          'DEVVIT_PRODUCTION_CONTRACT',
+          'package.json',
+          1,
+          'package.json scripts.typecheck must check src/client/tsconfig.json',
+          'Define "typecheck": "tsc --noEmit && tsc -p src/client/tsconfig.json --noEmit" in package.json.',
+        );
+      }
+    } catch (err) {
+      report(
+        'DEVVIT_PRODUCTION_CONTRACT',
+        'package.json',
+        1,
+        `Invalid JSON in package.json: ${String(err)}`,
+        'Fix JSON syntax in package.json.',
+      );
+    }
+  }
+
   return { violations, stats };
 }
 
@@ -681,5 +798,5 @@ if (isMain) {
     );
   }
   console.log('================================================================================');
-  console.log('check-invariants PASS — 0 violations across all 7 High-Trust Playbook rules!');
+  console.log(`check-invariants PASS — 0 violations across all ${Object.keys(stats).length} High-Trust Playbook rules!`);
 }

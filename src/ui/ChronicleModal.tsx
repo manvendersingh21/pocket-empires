@@ -1,5 +1,8 @@
 import React from 'react';
 import { CIVS, type GameState } from '../types/rts.js';
+import type { CareerRankInfo } from '../engine/career.js';
+import type { EvaluatedDailyBounty } from '../engine/dailyBounties.js';
+import type { RivalChallenge } from '../engine/leaderboardModel.js';
 import { computeScoreSummary } from '../engine/sim.js';
 import {
   CivCrest,
@@ -17,8 +20,14 @@ export interface ChronicleModalProps {
   epigraph: string;
   shareCode: string | null;
   commentStatus: 'idle' | 'posting' | 'posted' | 'copied' | 'error';
+  bounties?: EvaluatedDailyBounty[];
+  bountyBonusScore?: number;
+  rivalBanner?: RivalChallenge;
+  careerRank?: CareerRankInfo;
+  xpGained?: number;
   onPostComment: () => void;
   onCopyChronicle: () => void;
+  onOpenLeaderboard?: () => void;
   onPlayAgain: () => void;
   onBackToWarRoom: () => void;
 }
@@ -213,17 +222,25 @@ export function ChronicleModal({
   epigraph,
   shareCode,
   commentStatus,
+  bounties = [],
+  bountyBonusScore = 0,
+  rivalBanner,
+  careerRank,
+  xpGained = 0,
   onPostComment,
   onCopyChronicle,
+  onOpenLeaderboard,
   onPlayAgain,
   onBackToWarRoom,
 }: ChronicleModalProps) {
   if (!open) return null;
 
   const summary = computeScoreSummary(state);
+  const totalScore = summary.score + bountyBonusScore;
   const beatPar = summary.victory && summary.timeSec <= state.spec.parSec;
   const playerCiv = CIVS[state.spec.playerCiv];
   const isRaid = state.mode === 'raid';
+  const diff = state.spec.difficulty ?? 'standard';
   const initialEnemyBlds = state.initialEnemyBuildingCount ?? 0;
   const remainingEnemyBlds = state.buildings.filter((b) => b.team === 'enemy' && b.hp > 0).length;
   const raidDestructionPct = summary.victory
@@ -234,6 +251,32 @@ export function ChronicleModal({
           Math.max(0, Math.round(((initialEnemyBlds - remainingEnemyBlds) / initialEnemyBlds) * 100)),
         )
       : 0;
+
+  const rawTimeline = state.timeline && state.timeline.length >= 2
+    ? state.timeline
+    : [
+        { t: 0, playerPower: 180, enemyPower: 180 },
+        { t: Math.max(10, Math.round(summary.timeSec)), playerPower: summary.victory ? 320 : 90, enemyPower: summary.victory ? 70 : 310 },
+      ];
+  const maxPower = Math.max(
+    100,
+    ...rawTimeline.map((pt) => Math.max(pt.playerPower, pt.enemyPower)),
+  );
+  const chartW = 360;
+  const chartH = 54;
+  const toChartPoints = (pickVal: (p: (typeof rawTimeline)[number]) => number) =>
+    rawTimeline
+      .map((pt, idx) => {
+        const x = (idx / Math.max(1, rawTimeline.length - 1)) * chartW;
+        const y = chartH - 4 - (pickVal(pt) / maxPower) * (chartH - 10);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+  const playerLinePts = toChartPoints((p) => p.playerPower);
+  const enemyLinePts = toChartPoints((p) => p.enemyPower);
+  const playerAreaPts = `0,${chartH} ${playerLinePts} ${chartW},${chartH}`;
+
+  const completedBountyCount = bounties.filter((b) => b.completed).length;
 
   const subtitleLabel =
     isRaid && state.raidTargetOwner
@@ -453,7 +496,12 @@ export function ChronicleModal({
               }}
             >
               <EmpireIcon name="trophy" size={14} />
-              <span>{summary.score.toLocaleString()} pts</span>
+              <span>{totalScore.toLocaleString()} pts</span>
+              {bountyBonusScore > 0 && (
+                <span style={{ fontSize: '10px', color: '#86efac', fontWeight: 800 }}>
+                  (+{bountyBonusScore})
+                </span>
+              )}
             </span>
           </div>
 
@@ -498,7 +546,132 @@ export function ChronicleModal({
           </div>
         </div>
 
-        {/* 4. WOLOLOS, CHEEKY BADGE, FLAIR & SHARE CODE PILLS */}
+        {/* 3b. PSYCHOLOGICAL RIVAL GAP CALLOUT + BATTLE MOMENTUM CHART + BOUNTIES + CAREER XP */}
+        {rivalBanner && (
+          <div
+            data-testid="chronicle-rival-banner"
+            className="pe-chronicle-tabular"
+            style={{
+              padding: '8px 11px',
+              borderRadius: '12px',
+              background:
+                rivalBanner.playerRank === 1
+                  ? 'rgba(245, 166, 35, 0.16)'
+                  : 'rgba(37, 99, 235, 0.16)',
+              border:
+                rivalBanner.playerRank === 1
+                  ? '1px solid rgba(253, 224, 71, 0.45)'
+                  : '1px solid rgba(147, 197, 253, 0.35)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '2px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 900, color: '#fef3c7' }}>
+              <EmpireIcon name="target" size={13} />
+              <span>{stripEmoji(rivalBanner.headline)}</span>
+            </div>
+            <div style={{ fontSize: '11px', color: 'rgba(226, 232, 240, 0.85)', fontWeight: 600 }}>
+              {stripEmoji(rivalBanner.subline)}
+            </div>
+          </div>
+        )}
+
+        <div
+          data-testid="chronicle-momentum-chart"
+          style={{
+            padding: '7px 10px 6px',
+            borderRadius: '12px',
+            background: 'rgba(255, 255, 255, 0.045)',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', color: 'rgba(203, 213, 225, 0.72)' }}>
+            <span>Battle Momentum</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', textTransform: 'none' }}>
+              <span style={{ color: '#93c5fd' }}>Blue Empire</span>
+              <span style={{ color: '#fca5a5' }}>Rival Keep</span>
+            </span>
+          </div>
+          <svg
+            viewBox={`0 0 ${chartW} ${chartH}`}
+            preserveAspectRatio="none"
+            style={{ width: '100%', height: '48px', display: 'block' }}
+            aria-label="Battle Momentum Power Timeline"
+          >
+            <polygon points={playerAreaPts} fill="rgba(59, 130, 246, 0.22)" />
+            <polyline fill="none" stroke="#f87171" strokeWidth="1.8" strokeDasharray="4 3" points={enemyLinePts} />
+            <polyline fill="none" stroke="#60a5fa" strokeWidth="2.2" points={playerLinePts} />
+          </svg>
+        </div>
+
+        {(bounties.length > 0 || careerRank) && (
+          <div
+            className="pe-chronicle-tabular"
+            style={{
+              padding: '8px 10px',
+              borderRadius: '12px',
+              background: 'rgba(255, 255, 255, 0.045)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            {bounties.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', fontWeight: 800, color: '#fde68a', textTransform: 'uppercase' }}>
+                  <span>Daily Royal Bounties</span>
+                  <span>{completedBountyCount}/{bounties.length} Cleared</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '5px' }}>
+                  {bounties.map((b) => (
+                    <div
+                      key={b.id}
+                      style={{
+                        padding: '4px 6px',
+                        borderRadius: '8px',
+                        background: b.completed ? 'rgba(16, 185, 129, 0.16)' : 'rgba(255, 255, 255, 0.04)',
+                        border: b.completed ? '1px solid rgba(52, 211, 153, 0.5)' : '1px solid rgba(255, 255, 255, 0.1)',
+                        fontSize: '10px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '3px', fontWeight: 800, color: b.completed ? '#d1fae5' : '#cbd5e1' }}>
+                        <EmpireIcon name={b.icon} size={11} />
+                        <span>{b.completed ? `+${b.bonusScore}` : `${b.current}/${b.target}`}</span>
+                      </div>
+                      <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
+                        {b.title}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {careerRank && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10.5px', fontWeight: 800 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#fef3c7' }}>
+                    <EmpireIcon name="medal" size={12} />
+                    <span>Lv.{careerRank.level} {careerRank.title}</span>
+                  </span>
+                  <span style={{ color: '#86efac' }}>
+                    +{xpGained} XP · {careerRank.progressPct}%
+                  </span>
+                </div>
+                <div style={{ height: '4px', width: '100%', borderRadius: '999px', background: 'rgba(255, 255, 255, 0.1)', overflow: 'hidden' }}>
+                  <div style={{ width: `${careerRank.progressPct}%`, height: '100%', background: 'linear-gradient(90deg, #f59e0b, #fde047)' }} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 4. WOLOLOS, DIFFICULTY, RELICS, CHEEKY BADGE, FLAIR & SHARE CODE PILLS */}
         <div
           className="pe-chronicle-tabular"
           style={{
@@ -531,6 +704,46 @@ export function ChronicleModal({
             <EmpireIcon name="swords" size={12} />
             <span>{state.stats.enemyUnitsSlain} Slain</span>
           </span>
+
+          {diff !== 'standard' && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 10px',
+                borderRadius: '999px',
+                background: 'rgba(245, 168, 36, 0.2)',
+                border: '1px solid rgba(254, 240, 138, 0.55)',
+                fontSize: '11px',
+                fontWeight: 800,
+                color: '#fef3c7',
+              }}
+            >
+              <EmpireIcon name="star" size={12} />
+              <span>{diff === 'imperial' ? 'Imperial 1.35×' : 'Veteran 1.2×'}</span>
+            </span>
+          )}
+
+          {(state.stats.relicsCaptured ?? 0) > 0 && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 10px',
+                borderRadius: '999px',
+                background: 'rgba(250, 204, 21, 0.16)',
+                border: '1px solid rgba(253, 224, 71, 0.45)',
+                fontSize: '11px',
+                fontWeight: 800,
+                color: '#fde68a',
+              }}
+            >
+              <EmpireIcon name="relic" size={12} />
+              <span>{state.stats.relicsCaptured} Relic{(state.stats.relicsCaptured ?? 0) === 1 ? '' : 's'}</span>
+            </span>
+          )}
 
           {state.ages?.player === 2 && (
             <span
@@ -653,6 +866,17 @@ export function ChronicleModal({
               <EmpireIcon name="swords" size={14} />
               <span>Siege Again</span>
             </button>
+            {onOpenLeaderboard && (
+              <button
+                type="button"
+                data-testid="chronicle-leaderboard-btn"
+                className="pe-glass-modal-btn"
+                onClick={onOpenLeaderboard}
+              >
+                <EmpireIcon name="trophy" size={14} />
+                <span>Ranks</span>
+              </button>
+            )}
             <button
               type="button"
               className="pe-glass-modal-btn"

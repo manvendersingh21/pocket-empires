@@ -11,6 +11,7 @@ import {
   type GameState,
   type PlayerBaseBlueprint,
   type Projectile,
+  type Relic,
   type ResourceKind,
   type Resources,
   type SavedBuildingPlacement,
@@ -391,6 +392,108 @@ function spawnSymmetricWildHorses(state: GameState) {
   }
 }
 
+function spawnSymmetricRelics(state: GameState) {
+  const blocked = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
+  state.relics = [];
+
+  const nearFauna = (wx: number, wy: number) =>
+    (state.horses ?? []).some((h) => Math.hypot(h.x - wx, h.y - wy) <= 1.5);
+
+  const anchorX = 10;
+  const anchorY = 7;
+  let chosen: { x: number; y: number } | null = null;
+
+  outer: for (let radius = 0; radius <= 5; radius++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const tx = anchorX + dx;
+        const ty = anchorY + dy;
+        const mx = state.mapSize - 1 - tx;
+        const my = state.mapSize - 1 - ty;
+        if (!inBounds(tx, ty, state.mapSize) || !inBounds(mx, my, state.mapSize)) continue;
+        if (tx + ty <= 15) continue;
+        if (blocked[ty * state.mapSize + tx] !== 0) continue;
+        if (blocked[my * state.mapSize + mx] !== 0) continue;
+        if (nearFauna(tx + 0.5, ty + 0.5) || nearFauna(mx + 0.5, my + 0.5)) continue;
+        chosen = { x: tx + 0.5, y: ty + 0.5 };
+        break outer;
+      }
+    }
+  }
+
+  if (!chosen) {
+    outerFallback: for (let radius = 0; radius <= 5; radius++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const tx = anchorX + dx;
+          const ty = anchorY + dy;
+          const mx = state.mapSize - 1 - tx;
+          const my = state.mapSize - 1 - ty;
+          if (!inBounds(tx, ty, state.mapSize) || !inBounds(mx, my, state.mapSize)) continue;
+          if (tx + ty <= 15) continue;
+          if (blocked[ty * state.mapSize + tx] !== 0 || blocked[my * state.mapSize + mx] !== 0) continue;
+          chosen = { x: tx + 0.5, y: ty + 0.5 };
+          break outerFallback;
+        }
+      }
+    }
+  }
+
+  if (!chosen) {
+    chosen = { x: 9.5, y: 10.5 };
+  }
+  const twinX = state.mapSize - chosen.x;
+  const twinY = state.mapSize - chosen.y;
+
+  const makeRelic = (rx: number, ry: number): Relic => ({
+    id: state.nextId++,
+    x: rx,
+    y: ry,
+    homeX: rx,
+    homeY: ry,
+    owner: 'neutral',
+    carrierUnitId: null,
+    autoReturn: false,
+    goldTimer: 1.5,
+  });
+
+  state.relics.push(makeRelic(chosen.x, chosen.y));
+  state.relics.push(makeRelic(twinX, twinY));
+}
+
+function computeTeamPowerScore(state: GameState, team: Team): number {
+  let power = 0;
+  for (const u of state.units) {
+    if (u.team !== team || u.hp <= 0) continue;
+    const c = UNITS[u.kind].cost;
+    const unitCost = (c.wood ?? 0) + (c.food ?? 0) + (c.gold ?? 0);
+    const hpRatio = u.maxHp > 0 ? Math.max(0.25, u.hp / u.maxHp) : 1;
+    power += unitCost * (0.4 + 0.6 * hpRatio);
+  }
+  for (const b of state.buildings) {
+    if (b.team !== team || b.hp <= 0) continue;
+    const hpRatio = b.maxHp > 0 ? Math.max(0.1, b.hp / b.maxHp) : 1;
+    power += (b.kind === 'town_center' ? 180 : 75) * hpRatio;
+  }
+  const res = state.resources[team];
+  power += 0.3 * (res.wood + res.food + res.gold);
+  return Math.max(0, Math.round(power));
+}
+
+function recordTimelinePoint(state: GameState) {
+  if (!state.timeline) state.timeline = [];
+  const t = Math.max(0, Math.round(state.timeSec));
+  const last = state.timeline[state.timeline.length - 1];
+  const playerPower = computeTeamPowerScore(state, 'player');
+  const enemyPower = computeTeamPowerScore(state, 'enemy');
+  if (last && last.t === t) {
+    last.playerPower = playerPower;
+    last.enemyPower = enemyPower;
+    return;
+  }
+  state.timeline.push({ t, playerPower, enemyPower });
+}
+
 export function recomputeFog(state: GameState) {
   if (state.mode === 'base_builder') {
     state.fog.fill(2);
@@ -454,6 +557,8 @@ function createBlankMatchStats(): GameState['stats'] {
     horsesTamed: 0,
     sheepHerded: 0,
     boarsHunted: 0,
+    relicsCaptured: 0,
+    townBellsRung: 0,
     countsByUnit: {},
   };
 }
@@ -462,6 +567,7 @@ export function createInitialState(spec: SkirmishSpec): GameState {
   const tiles = buildMapTiles(spec);
   const fog = new Array<FogState>(MAP_SIZE * MAP_SIZE).fill(0);
   const goldStart = 65 + (spec.startingGoldBonus ?? 0);
+  const isImperial = spec.difficulty === 'imperial';
 
   const state: GameState = {
     spec,
@@ -477,11 +583,18 @@ export function createInitialState(spec: SkirmishSpec): GameState {
     nextId: 1,
     resources: {
       player: { wood: 125, food: 115, gold: goldStart },
-      enemy: { wood: 125, food: 115, gold: goldStart },
+      enemy: {
+        wood: 125 + (isImperial ? 45 : 0),
+        food: 115 + (isImperial ? 45 : 0),
+        gold: goldStart + (isImperial ? 35 : 0),
+      },
     },
     buildings: [],
     units: [],
     horses: [],
+    relics: [],
+    timeline: [],
+    townBellSec: 0,
     projectiles: [],
     callouts: [],
     soundEvents: [],
@@ -517,8 +630,10 @@ export function createInitialState(spec: SkirmishSpec): GameState {
   ev3.order = { type: 'gather', tileX: 8, tileY: 4, resource: 'gold' };
   spawnUnit(state, 'enemy', 'scout', 6.5, 5.2);
 
-  // Spawn 4 symmetric wild horses grazing in the meadows
+  // Spawn symmetric wild fauna & contested Sacred Relics
   spawnSymmetricWildHorses(state);
+  spawnSymmetricRelics(state);
+  recordTimelinePoint(state);
 
   recomputeFog(state);
   return state;
@@ -691,6 +806,9 @@ export function createBaseBuilderState(
     buildings: [],
     units: [],
     horses: [],
+    relics: [],
+    timeline: [],
+    townBellSec: 0,
     projectiles: [],
     callouts: [],
     soundEvents: [],
@@ -847,6 +965,9 @@ export function createPlayerRaidState(
     buildings: [],
     units: [],
     horses: [],
+    relics: [],
+    timeline: [],
+    townBellSec: 0,
     projectiles: [],
     callouts: [],
     soundEvents: [],
@@ -906,6 +1027,8 @@ export function createPlayerRaidState(
   spawnUnitsAroundKeep(state, 'enemy', ['villager', 'villager'], enemyTc);
 
   spawnSymmetricWildHorses(state);
+  spawnSymmetricRelics(state);
+  recordTimelinePoint(state);
   recomputeFog(state);
   return state;
 }
@@ -1218,6 +1341,29 @@ export function cmdIssueOrder(
     }
   }
 
+  // 3b. Check neutral uncarried Relic on/near target tile for military & monk units
+  if (state.relics && state.relics.length > 0) {
+    const targetRelic = state.relics.find(
+      (r) =>
+        r.carrierUnitId === null &&
+        r.owner === 'neutral' &&
+        Math.hypot(r.x - clickX, r.y - clickY) <= 1.35,
+    );
+    if (targetRelic && selected.some((u) => u.kind !== 'villager')) {
+      for (const u of selected) {
+        u.path = [];
+        u.order = {
+          type: 'move',
+          tx: targetRelic.x,
+          ty: targetRelic.y,
+          attackMove: false,
+        };
+      }
+      if (team === 'player') emitSound(state, 'order_move');
+      return 'move';
+    }
+  }
+
   // 4. Standard move / attack-move with gentle formation spread
   selected.forEach((u, idx) => {
     const spreadAngle = (idx * 2.39996) % (Math.PI * 2);
@@ -1234,6 +1380,124 @@ export function cmdIssueOrder(
   });
   if (team === 'player') emitSound(state, 'order_move');
   return 'move';
+}
+
+export function cmdSetRallyPoint(
+  state: GameState,
+  team: Team,
+  buildingId: number,
+  tileX: number,
+  tileY: number,
+): boolean {
+  if (state.outcome !== 'playing') return false;
+  const b = state.buildings.find(
+    (bld) =>
+      bld.id === buildingId &&
+      bld.team === team &&
+      bld.hp > 0 &&
+      (bld.kind === 'town_center' ||
+        bld.kind === 'barracks' ||
+        bld.kind === 'archery_range' ||
+        bld.kind === 'stable' ||
+        bld.kind === 'monastery' ||
+        bld.kind === 'watchtower'),
+  );
+  if (!b) return false;
+
+  const tx = Math.max(0, Math.min(state.mapSize - 1, Math.floor(tileX)));
+  const ty = Math.max(0, Math.min(state.mapSize - 1, Math.floor(tileY)));
+  b.rallyX = tx + 0.5;
+  b.rallyY = ty + 0.5;
+  if (team === 'player') {
+    emitSound(state, 'rally_set');
+    addCallout(state, b.rallyX, b.rallyY - 0.2, 'Rally Flag Set', '#93c5fd', 1.1);
+  }
+  return true;
+}
+
+export function cmdCancelQueueItem(
+  state: GameState,
+  team: Team,
+  buildingId: number,
+  queueIndex?: number,
+): boolean {
+  if (state.outcome !== 'playing') return false;
+  const b = state.buildings.find(
+    (bld) => bld.id === buildingId && bld.team === team && bld.hp > 0 && bld.queue.length > 0,
+  );
+  if (!b) return false;
+
+  const idx = queueIndex === undefined ? b.queue.length - 1 : Math.floor(queueIndex);
+  if (idx < 0 || idx >= b.queue.length) return false;
+
+  const [removed] = b.queue.splice(idx, 1);
+  if (!removed) return false;
+
+  const refund = getEffectiveUnitCost(state.spec, team, removed.unit);
+  state.resources[team].wood += refund.wood;
+  state.resources[team].food += refund.food;
+  state.resources[team].gold += refund.gold;
+  return true;
+}
+
+function reTaskIdleTownVillagers(state: GameState, team: Team, tc: Building) {
+  const villagers = state.units.filter(
+    (u) => u.team === team && u.hp > 0 && u.kind === 'villager',
+  );
+  const resCycle: readonly ResourceKind[] = ['wood', 'food', 'gold'];
+  let idx = 0;
+  for (const v of villagers) {
+    const isReturningFromBell =
+      v.order.type === 'move' &&
+      !v.order.attackMove &&
+      Math.hypot(v.order.tx - (tc.tileX + 1), v.order.ty - (tc.tileY + 1)) <= 1.2;
+    if (v.order.type !== 'idle' && !isReturningFromBell) continue;
+    const desired = resCycle[idx % resCycle.length];
+    idx++;
+    const tile =
+      findNearestResourceTile(state, desired, v.x, v.y, 10) ??
+      findNearestResourceTile(state, 'wood', v.x, v.y, 12) ??
+      findNearestResourceTile(state, 'gold', v.x, v.y, 12);
+    if (tile) {
+      const res = tileToResource(state.tiles[tile.y * state.mapSize + tile.x]?.kind ?? 'grass');
+      if (res) {
+        v.path = [];
+        v.order = { type: 'gather', tileX: tile.x, tileY: tile.y, resource: res };
+      }
+    }
+  }
+}
+
+export function cmdRingTownBell(state: GameState, team: Team): boolean {
+  if (state.outcome !== 'playing') return false;
+  const tc = state.buildings.find(
+    (b) => b.team === team && b.hp > 0 && b.kind === 'town_center',
+  );
+  if (!tc) return false;
+
+  if (team === 'player') {
+    if ((state.townBellSec ?? 0) > 0) {
+      state.townBellSec = 0;
+      reTaskIdleTownVillagers(state, 'player', tc);
+      addCallout(state, tc.tileX + 1, tc.tileY + 0.4, 'All Clear! Back to Work', '#86efac', 1.4);
+      return true;
+    }
+    state.townBellSec = 12;
+    state.stats.townBellsRung = (state.stats.townBellsRung ?? 0) + 1;
+    emitSound(state, 'town_bell');
+    addCallout(state, tc.tileX + 1, tc.tileY + 0.4, 'TOWN BELL! To the Keep!', '#fde047', 1.9);
+  }
+
+  const tcCx = tc.tileX + tc.size / 2;
+  const tcCy = tc.tileY + tc.size / 2;
+  for (const u of state.units) {
+    if (u.team !== team || u.hp <= 0 || u.kind !== 'villager') continue;
+    if (Math.hypot(u.x - tcCx, u.y - tcCy) <= 8.5) {
+      u.path = [];
+      u.order = { type: 'move', tx: tcCx, ty: tcCy, attackMove: false };
+    }
+  }
+  return true;
 }
 
 export function cmdAttackEnemyKeep(state: GameState, team: Team): number {
@@ -1487,6 +1751,7 @@ function applyBuildingHit(state: GameState, building: Building, dmg: number) {
     }
     if (building.kind === 'town_center') {
       state.outcome = building.team === 'enemy' ? 'victory' : 'defeat';
+      recordTimelinePoint(state);
       emitSound(state, state.outcome === 'victory' ? 'victory' : 'defeat');
     }
   }
@@ -1574,12 +1839,24 @@ function stepEnemyAI(state: GameState) {
   const tc = enemyBuildings.find((b) => b.kind === 'town_center');
   if (!tc) return;
 
+  const diff = state.spec.difficulty ?? 'standard';
+  const villagerCap = diff === 'imperial' ? 7 : diff === 'veteran' ? 6 : 5;
+  const militaryCap = diff === 'imperial' ? 13 : diff === 'veteran' ? 11 : 9;
+  const ageUpSec = diff === 'imperial' ? 68 : diff === 'veteran' ? 80 : 95;
+  const waveInterval = diff === 'imperial' ? 31 : diff === 'veteran' ? 37 : 44;
+
   const villagers = enemyUnits.filter((u) => u.kind === 'villager');
   const military = enemyUnits.filter((u) => u.kind !== 'villager');
 
-  // 1. Keep up to 5 villagers working wood/food/gold
-  if (villagers.length < 5 && tc.queue.length === 0) {
+  // 1. Keep villagers working wood/food/gold (and repair damaged Enemy Keep on Veteran/Imperial)
+  if (villagers.length < villagerCap && tc.queue.length === 0) {
     cmdTrainUnit(state, 'enemy', 'villager', tc.id);
+  }
+  if ((diff === 'veteran' || diff === 'imperial') && tc.hp < tc.maxHp * 0.85 && villagers.length > 0) {
+    const repairer = villagers.find((v) => Math.hypot(v.x - (tc.tileX + 1), v.y - (tc.tileY + 1)) <= 4.5);
+    if (repairer) {
+      tc.hp = Math.min(tc.maxHp, tc.hp + 6);
+    }
   }
   villagers.forEach((v, idx) => {
     if (v.order.type !== 'idle') return;
@@ -1647,13 +1924,20 @@ function stepEnemyAI(state: GameState) {
     ]);
   }
 
-  // Advance to Castle Age around t >= 95s if the enemy treasury can afford it
-  if ((state.ages?.enemy ?? 1) < 2 && state.timeSec >= 95) {
+  // Advance to Castle Age if the enemy treasury can afford it
+  if ((state.ages?.enemy ?? 1) < 2 && state.timeSec >= ageUpSec) {
     cmdAdvanceAge(state, 'enemy');
   }
 
-  // 3. Train persona units smoothly (capped so matches stay crisp 2-4 min puzzles)
-  if (military.length < 9) {
+  // 3. Train persona & adaptive counter units smoothly
+  if (military.length < militaryCap) {
+    const playerKnights = state.units.filter(
+      (u) => u.team === 'player' && u.hp > 0 && u.kind === 'knight',
+    ).length;
+    const playerArchers = state.units.filter(
+      (u) => u.team === 'player' && u.hp > 0 && u.kind === 'archer',
+    ).length;
+
     if (
       (state.ages?.enemy ?? 1) >= 2 &&
       hasKind('watchtower') &&
@@ -1661,6 +1945,20 @@ function stepEnemyAI(state: GameState) {
       cmdTrainUnit(state, 'enemy', 'trebuchet')
     ) {
       // Queued siege trebuchet
+    } else if (
+      (diff === 'veteran' || diff === 'imperial') &&
+      playerKnights >= 2 &&
+      hasKind('barracks') &&
+      cmdTrainUnit(state, 'enemy', 'pikeman')
+    ) {
+      // Adaptive anti-cavalry pikemen
+    } else if (
+      (diff === 'veteran' || diff === 'imperial') &&
+      playerArchers >= 3 &&
+      hasKind('stable') &&
+      cmdTrainUnit(state, 'enemy', 'knight')
+    ) {
+      // Adaptive anti-archer knights
     } else if (persona === 'longbow_earl') {
       cmdTrainUnit(state, 'enemy', 'archer') || cmdTrainUnit(state, 'enemy', 'pikeman');
     } else if (persona === 'knight_baron') {
@@ -1671,6 +1969,30 @@ function stepEnemyAI(state: GameState) {
       cmdTrainUnit(state, 'enemy', 'militia') || cmdTrainUnit(state, 'enemy', 'pikeman');
     } else {
       cmdTrainUnit(state, 'enemy', 'militia') || cmdTrainUnit(state, 'enemy', 'pikeman');
+    }
+  }
+
+  // On Veteran/Imperial, send an idle scout or monk to claim an unclaimed neutral Relic
+  if ((diff === 'veteran' || diff === 'imperial') && state.relics && state.relics.length > 0) {
+    const unclaimedRelic = state.relics.find(
+      (r) => r.owner === 'neutral' && r.carrierUnitId === null,
+    );
+    if (unclaimedRelic) {
+      const courier = military.find(
+        (m) =>
+          (m.kind === 'scout' || m.kind === 'monk') &&
+          m.order.type === 'idle' &&
+          !state.relics?.some((r) => r.carrierUnitId === m.id),
+      );
+      if (courier) {
+        courier.path = [];
+        courier.order = {
+          type: 'move',
+          tx: unclaimedRelic.x,
+          ty: unclaimedRelic.y,
+          attackMove: false,
+        };
+      }
     }
   }
 
@@ -1691,8 +2013,11 @@ function stepEnemyAI(state: GameState) {
   }
 
   if (state.enemyWaveTimer <= 0 && military.length >= 3) {
-    state.enemyWaveTimer = 44;
-    const raiders = military.slice(0, Math.min(4, military.length));
+    state.enemyWaveTimer = waveInterval;
+    const waveSize = diff === 'imperial' ? 6 : diff === 'veteran' ? 5 : 4;
+    const raiders = military
+      .filter((m) => !state.relics?.some((r) => r.carrierUnitId === m.id))
+      .slice(0, Math.min(waveSize, military.length));
     for (const r of raiders) {
       r.path = [];
       r.order = {
@@ -1701,6 +2026,16 @@ function stepEnemyAI(state: GameState) {
         ty: PLAYER_TC_POS.y + 0.5,
         attackMove: r.kind !== 'monk',
       };
+    }
+    if (raiders.length >= 3) {
+      addCallout(
+        state,
+        raiders[0].x,
+        raiders[0].y - 0.35,
+        `${state.spec.aiLeaderName}'s Raiders March!`,
+        '#fca5a5',
+        1.8,
+      );
     }
   }
 }
@@ -2048,10 +2383,200 @@ function stepWildHorses(
   }
 }
 
+function stepRelics(
+  state: GameState,
+  blockedNeutral: Uint8Array,
+  dt: number,
+) {
+  if (!state.relics || state.relics.length === 0) return;
+
+  const findHomeSanctuary = (team: Team, fromX: number, fromY: number): Building | null => {
+    const builtMonastery = state.buildings
+      .filter((b) => b.team === team && b.hp > 0 && b.built && b.kind === 'monastery')
+      .sort(
+        (a, b) =>
+          Math.hypot(a.tileX + 0.5 - fromX, a.tileY + 0.5 - fromY) -
+          Math.hypot(b.tileX + 0.5 - fromX, b.tileY + 0.5 - fromY),
+      )[0];
+    if (builtMonastery) return builtMonastery;
+    return (
+      state.buildings.find((b) => b.team === team && b.hp > 0 && b.kind === 'town_center') ?? null
+    );
+  };
+
+  for (const relic of state.relics) {
+    if (relic.carrierUnitId !== null) {
+      const carrier = state.units.find((u) => u.id === relic.carrierUnitId && u.hp > 0);
+      if (!carrier) {
+        const dropTile = nearestWalkableTile(
+          blockedNeutral,
+          state.mapSize,
+          Math.floor(relic.x),
+          Math.floor(relic.y),
+          relic.x,
+          relic.y,
+          1,
+        );
+        relic.x = dropTile
+          ? dropTile.x + 0.5
+          : Math.max(0.5, Math.min(state.mapSize - 0.5, relic.x));
+        relic.y = dropTile
+          ? dropTile.y + 0.5
+          : Math.max(0.5, Math.min(state.mapSize - 0.5, relic.y));
+        relic.carrierUnitId = null;
+        relic.owner = 'neutral';
+        relic.autoReturn = false;
+        continue;
+      }
+
+      relic.x = carrier.x;
+      relic.y = carrier.y;
+
+      const sanctuary = findHomeSanctuary(carrier.team, carrier.x, carrier.y);
+      if (sanctuary && distanceToBuilding(carrier.x, carrier.y, sanctuary) <= 1.55) {
+        const spot = nearestWalkableTile(
+          blockedNeutral,
+          state.mapSize,
+          sanctuary.tileX,
+          sanctuary.tileY,
+          carrier.x,
+          carrier.y,
+          sanctuary.size,
+        );
+        relic.x = spot
+          ? spot.x + 0.5
+          : Math.max(0.5, Math.min(state.mapSize - 0.5, sanctuary.tileX + 0.5));
+        relic.y = spot
+          ? spot.y + 0.5
+          : Math.max(0.5, Math.min(state.mapSize - 0.5, sanctuary.tileY + 0.5));
+        relic.carrierUnitId = null;
+        relic.owner = carrier.team;
+        const wasAuto = relic.autoReturn;
+        relic.autoReturn = false;
+        relic.goldTimer = 1.5;
+
+        if (wasAuto) {
+          carrier.order = { type: 'idle' };
+          carrier.path = [];
+        }
+        if (carrier.team === 'player') {
+          state.stats.relicsCaptured = (state.stats.relicsCaptured ?? 0) + 1;
+          emitSound(state, 'relic_capture');
+          addCallout(state, relic.x, relic.y - 0.35, 'Relic Enshrined! +Gold', '#fde047', 1.9);
+        }
+        continue;
+      }
+
+      relic.goldTimer -= dt;
+      if (relic.goldTimer <= 0) {
+        relic.goldTimer += 1.5;
+        if (relic.goldTimer <= 0) relic.goldTimer = 1.5;
+        state.resources[carrier.team].gold += 1;
+        if (carrier.team === 'player') {
+          state.stats.goldGathered += 1;
+        }
+      }
+      continue;
+    }
+
+    if (relic.owner === 'neutral') {
+      let claimer: Unit | null = null;
+      let bestDist = 1.25;
+      for (const u of state.units) {
+        if (u.hp <= 0 || u.kind === 'villager') continue;
+        if (state.relics.some((other) => other.carrierUnitId === u.id)) continue;
+        const d = Math.hypot(u.x - relic.x, u.y - relic.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          claimer = u;
+        }
+      }
+      if (claimer) {
+        relic.carrierUnitId = claimer.id;
+        relic.goldTimer = 1.5;
+        const isEscortOrder = claimer.order.type === 'move' && !claimer.order.attackMove;
+        if (claimer.kind === 'monk' || isEscortOrder) {
+          const dest = findHomeSanctuary(claimer.team, claimer.x, claimer.y);
+          if (dest) {
+            relic.autoReturn = true;
+            claimer.path = [];
+            claimer.order = {
+              type: 'move',
+              tx: dest.tileX + dest.size / 2,
+              ty: dest.tileY + dest.size / 2,
+              attackMove: false,
+            };
+          }
+        } else {
+          relic.autoReturn = false;
+        }
+        if (claimer.team === 'player') {
+          emitSound(state, 'relic_capture');
+          addCallout(state, claimer.x, claimer.y - 0.4, 'Relic Claimed!', '#fde047', 1.5);
+        }
+      }
+      continue;
+    }
+
+    const owner = relic.owner;
+    const guardingBld = state.buildings.find(
+      (b) =>
+        b.team === owner &&
+        b.hp > 0 &&
+        b.built &&
+        (b.kind === 'monastery' || b.kind === 'town_center') &&
+        distanceToBuilding(relic.x, relic.y, b) <= 2.4,
+    );
+    if (!guardingBld) {
+      relic.owner = 'neutral';
+      relic.goldTimer = 1.5;
+      continue;
+    }
+
+    relic.goldTimer -= dt;
+    if (relic.goldTimer <= 0) {
+      relic.goldTimer += 1.5;
+      if (relic.goldTimer <= 0) relic.goldTimer = 1.5;
+      const hasMonastery = state.buildings.some(
+        (b) => b.team === owner && b.hp > 0 && b.built && b.kind === 'monastery',
+      );
+      const goldGain = hasMonastery ? 4 : 3;
+      state.resources[owner].gold += goldGain;
+      if (owner === 'player') {
+        state.stats.goldGathered += goldGain;
+        if ((state.tick + relic.id * 5) % 2 === 0) {
+          addCallout(state, relic.x, relic.y - 0.25, `+${goldGain} Relic`, '#fde047', 1.1);
+        }
+      }
+    }
+  }
+}
+
 export function stepGame(state: GameState, dt: number) {
   if (state.outcome !== 'playing') return;
   state.timeSec += dt;
   state.tick++;
+
+  // Town Bell countdown & automatic return to work
+  if ((state.townBellSec ?? 0) > 0) {
+    state.townBellSec = Math.max(0, (state.townBellSec ?? 0) - dt);
+    if (state.townBellSec <= 0) {
+      const playerTc = state.buildings.find(
+        (b) => b.team === 'player' && b.hp > 0 && b.kind === 'town_center',
+      );
+      if (playerTc) {
+        reTaskIdleTownVillagers(state, 'player', playerTc);
+        addCallout(
+          state,
+          playerTc.tileX + 1,
+          playerTc.tileY + 0.4,
+          'All Clear! Back to Work',
+          '#86efac',
+          1.4,
+        );
+      }
+    }
+  }
 
   const blockedNeutral = buildBlockedGrid(state.tiles, state.buildings, state.mapSize);
   const blockedForPlayer = buildBlockedGrid(
@@ -2137,19 +2662,43 @@ export function stepGame(state: GameState, dt: number) {
         const sx = Math.max(0.5, Math.min(state.mapSize - 0.5, spawnSpot[0]?.x ?? b.rallyX));
         const sy = Math.max(0.5, Math.min(state.mapSize - 0.5, spawnSpot[0]?.y ?? b.rallyY));
         const u = spawnUnit(state, b.team, head.unit, sx, sy);
+        const defaultRallyX = b.tileX + b.size / 2;
+        const defaultRallyY = Math.max(
+          0.5,
+          Math.min(state.mapSize - 0.5, b.team === 'player' ? b.tileY - 0.8 : b.tileY + b.size + 0.8),
+        );
+        const hasCustomRally = Math.hypot(b.rallyX - defaultRallyX, b.rallyY - defaultRallyY) > 0.9;
+
         if (b.team === 'player') {
           if (head.unit === 'villager') {
             state.stats.villagersTrained++;
             emitSound(state, 'villager_spawn');
-            // Auto-send newly trained villager to nearest tree if rallied near default
-            const nearWood = findNearestResourceTile(state, 'wood', sx, sy, 5.5);
-            if (nearWood) {
-              u.order = { type: 'gather', tileX: nearWood.x, tileY: nearWood.y, resource: 'wood' };
+            const rtx = Math.max(0, Math.min(state.mapSize - 1, Math.floor(b.rallyX)));
+            const rty = Math.max(0, Math.min(state.mapSize - 1, Math.floor(b.rallyY)));
+            const rallyTile = state.tiles[rty * state.mapSize + rtx];
+            const rallyRes = rallyTile ? tileToResource(rallyTile.kind) : null;
+            if (rallyRes && rallyTile.amount > 0) {
+              u.order = { type: 'gather', tileX: rtx, tileY: rty, resource: rallyRes };
+            } else if (hasCustomRally) {
+              u.order = { type: 'move', tx: b.rallyX, ty: b.rallyY, attackMove: false };
+            } else {
+              const nearWood = findNearestResourceTile(state, 'wood', sx, sy, 5.5);
+              if (nearWood) {
+                u.order = { type: 'gather', tileX: nearWood.x, tileY: nearWood.y, resource: 'wood' };
+              }
             }
           } else {
             state.stats.militaryTrained++;
             state.stats.countsByUnit[head.unit] = (state.stats.countsByUnit[head.unit] ?? 0) + 1;
             emitSound(state, 'military_spawn');
+            if (hasCustomRally) {
+              u.order = {
+                type: 'move',
+                tx: b.rallyX,
+                ty: b.rallyY,
+                attackMove: head.unit !== 'monk',
+              };
+            }
           }
         }
       }
@@ -2163,7 +2712,10 @@ export function stepGame(state: GameState, dt: number) {
         const civ = getCivForTeam(state, b.team);
         let range = bSpec.attackRange + (civ === 'teutons' ? 1.5 : 0);
         if (state.spec.modifier === 'fletchers_wind') range += 1.0;
-        const dmg = Math.round(bSpec.attackDamage * (civ === 'teutons' ? 1.35 : 1.0));
+        const bellActive =
+          b.team === 'player' && b.kind === 'town_center' && (state.townBellSec ?? 0) > 0;
+        const dmg =
+          Math.round(bSpec.attackDamage * (civ === 'teutons' ? 1.35 : 1.0)) + (bellActive ? 3 : 0);
         const cx = b.tileX + b.size / 2;
         const cy = b.tileY + b.size / 2;
 
@@ -2178,7 +2730,7 @@ export function stepGame(state: GameState, dt: number) {
           }
         }
         if (target) {
-          b.attackTimer = bSpec.attackCooldownSec;
+          b.attackTimer = bellActive ? bSpec.attackCooldownSec * 0.58 : bSpec.attackCooldownSec;
           state.projectiles.push({
             id: state.nextId++,
             team: b.team,
@@ -2197,8 +2749,9 @@ export function stepGame(state: GameState, dt: number) {
     }
   }
 
-  // 1b. Update Wild Horses, Fluffy Sheep & Wild Boars
+  // 1b. Update Wild Horses, Fluffy Sheep, Wild Boars & Contested Sacred Relics
   stepWildHorses(state, blockedNeutral, blockedForPlayer, blockedForEnemy, dt);
+  stepRelics(state, blockedNeutral, dt);
 
   // 2. Update units
   const playerHorses = countTamedHorses(state, 'player');
@@ -2630,9 +3183,12 @@ export function stepGame(state: GameState, dt: number) {
     }
   }
 
-  // 6. Refresh Player Fog of War every 4 ticks
+  // 6. Refresh Player Fog of War every 4 ticks & record Momentum Timeline every 10s
   if (state.tick % 4 === 0) {
     recomputeFog(state);
+  }
+  if (state.tick % 200 === 0 && state.outcome === 'playing') {
+    recordTimelinePoint(state);
   }
 }
 
@@ -2705,15 +3261,25 @@ export function computeScoreSummary(state: GameState): ScoreSummary {
   const combatBonus =
     state.stats.enemyUnitsSlain * 55 +
     state.stats.enemyBuildingsRazed * 110 +
-    state.stats.wololoConversions * 200 -
+    state.stats.wololoConversions * 200 +
+    (state.stats.relicsCaptured ?? 0) * 175 -
     state.stats.unitsLost * 20;
-  const score = Math.max(100, base + speedBonus + combatBonus);
+  const diffMult =
+    state.spec.difficulty === 'imperial'
+      ? 1.35
+      : state.spec.difficulty === 'veteran'
+        ? 1.2
+        : 1.0;
+  const score = Math.max(100, Math.round((base + speedBonus + combatBonus) * diffMult));
 
   let strategyLabel = 'Combined Arms Siege';
   let strategyIcon = '⚔️';
   if (state.stats.wololoConversions >= 2) {
     strategyLabel = 'Wololo Cult';
     strategyIcon = '🧙';
+  } else if ((state.stats.relicsCaptured ?? 0) >= 2) {
+    strategyLabel = 'Relic Crusader';
+    strategyIcon = '🏆';
   } else if ((state.stats.countsByUnit.knight ?? 0) >= 3) {
     strategyLabel = 'Heavy Cavalry Charge';
     strategyIcon = '🐎';

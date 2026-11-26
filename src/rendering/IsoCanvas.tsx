@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BIOMES,
   BUILDINGS,
+  UNITS,
   type BiomeDef,
   type Building,
   type BuildingKind,
@@ -9,6 +10,7 @@ import {
   type GameState,
   type MapTile,
   type Projectile,
+  type Relic,
   type Team,
   type Unit,
   type WildHorse,
@@ -32,10 +34,13 @@ export interface IsoCanvasProps {
   selectedBuildingId: number | null;
   placementKind: BuildingKind | null;
   demolishMode?: boolean;
+  rallyMode?: boolean;
+  focusTarget?: { tileX: number; tileY: number; seq: number } | null;
   onSelectUnits: (ids: number[]) => void;
   onSelectBuilding: (id: number | null) => void;
   onIssueTileOrder: (tileX: number, tileY: number) => void;
   onPlaceBuildingAt: (tileX: number, tileY: number) => void;
+  onSetRallyPoint?: (buildingId: number, tileX: number, tileY: number) => void;
   onCancelPlacement: () => void;
   onDemolishAt?: (tileX: number, tileY: number) => void;
   showMinimap?: boolean;
@@ -112,7 +117,25 @@ type RenderableEntity =
       kind: 'horse';
       depth: number;
       horse: WildHorse;
+    }
+  | {
+      kind: 'relic';
+      depth: number;
+      relic: Relic;
     };
+
+interface CombatParticle {
+  wx: number;
+  wy: number;
+  vx: number;
+  vy: number;
+  z: number;
+  vz: number;
+  color: string;
+  size: number;
+  lifeSec: number;
+  maxLifeSec: number;
+}
 
 // Deterministic fast hash in [0, 1) for rock-steady terrain details
 function tileHash(x: number, y: number, salt = 0): number {
@@ -2128,6 +2151,8 @@ function drawUnit(
   selected: boolean,
   isBeingConverted: boolean,
   animSec: number,
+  carryingRelic = false,
+  hitFlash = false,
 ) {
   const { wx, wy } = tileToWorld(u.x, u.y);
   const pal = TEAM_PALETTES[u.team];
@@ -2870,6 +2895,31 @@ function drawUnit(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('!', wx, badgeY + 0.5);
+  }
+
+  // Carried Sacred Relic indicator above bearer
+  if (carryingRelic) {
+    const relicY = wy - topOffset - bob - 9.5 + Math.sin(animSec * 4.5 + u.id) * 1.4;
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.34)';
+    ctx.beginPath();
+    ctx.arc(wx, relicY, 7.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f59e0b';
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 1;
+    ctx.fillRect(wx - 4.2, relicY - 2.6, 8.4, 5.2);
+    ctx.strokeRect(wx - 4.2, relicY - 2.6, 8.4, 5.2);
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(wx - 1.2, relicY - 4.2, 2.4, 3.0);
+  }
+
+  // Brief impact highlight flash on recent combat hit
+  if (hitFlash) {
+    ctx.strokeStyle = 'rgba(254, 240, 138, 0.92)';
+    ctx.lineWidth = 2.1;
+    ctx.beginPath();
+    ctx.ellipse(wx, wy - 10, 10.5, 13.5, 0, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   ctx.restore();
@@ -3729,8 +3779,8 @@ function drawPlacementPreview(
     ctx.ellipse(
       cx,
       cy,
-      spec.attackRange * (TILE_W / 2),
-      spec.attackRange * (TILE_H / 2),
+      spec.attackRange * Math.SQRT2 * (TILE_W / 2),
+      spec.attackRange * Math.SQRT2 * (TILE_H / 2),
       0,
       0,
       Math.PI * 2,
@@ -3791,6 +3841,228 @@ function drawPlacementPreview(
     ctx.moveTo(cx + 7, cy - 15);
     ctx.lineTo(cx - 7, cy - 1);
     ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawSacredRelic(
+  ctx: CanvasRenderingContext2D,
+  relic: Relic,
+  animSec: number,
+) {
+  const { wx, wy } = tileToWorld(relic.x, relic.y);
+  const pulse = 0.5 + 0.5 * Math.sin(animSec * 3.4 + relic.id * 1.1);
+  const auraColor =
+    relic.owner === 'player'
+      ? 'rgba(96, 165, 250, 0.34)'
+      : relic.owner === 'enemy'
+        ? 'rgba(248, 113, 113, 0.34)'
+        : 'rgba(250, 204, 21, 0.32)';
+
+  ctx.save();
+  // Warm vertical golden light shaft
+  const shaftGrad = ctx.createLinearGradient(wx, wy - 44, wx, wy + 2);
+  shaftGrad.addColorStop(0, 'rgba(254, 240, 138, 0)');
+  shaftGrad.addColorStop(1, auraColor);
+  ctx.fillStyle = shaftGrad;
+  ctx.beginPath();
+  ctx.moveTo(wx - 6.5, wy - 40);
+  ctx.lineTo(wx + 6.5, wy - 40);
+  ctx.lineTo(wx + 11, wy + 2);
+  ctx.lineTo(wx - 11, wy + 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Carved stone altar plinth
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+  ctx.beginPath();
+  ctx.ellipse(wx, wy + 2, 11, 5.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(wx - 8, wy);
+  ctx.lineTo(wx + 8, wy);
+  ctx.lineTo(wx + 6.5, wy - 4.5);
+  ctx.lineTo(wx - 6.5, wy - 4.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Gleaming golden Relic Ark
+  const bob = Math.sin(animSec * 2.8 + relic.id) * 1.2;
+  const ry = wy - 9.5 + bob;
+  ctx.fillStyle = '#f59e0b';
+  ctx.strokeStyle = '#78350f';
+  ctx.lineWidth = 1.15;
+  ctx.fillRect(wx - 5.5, ry - 3.5, 11, 6.8);
+  ctx.strokeRect(wx - 5.5, ry - 3.5, 11, 6.8);
+
+  // Crowned lid & ruby core
+  ctx.fillStyle = '#fde047';
+  ctx.beginPath();
+  ctx.moveTo(wx - 6.2, ry - 3.5);
+  ctx.lineTo(wx, ry - 7.5);
+  ctx.lineTo(wx + 6.2, ry - 3.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#dc2626';
+  ctx.beginPath();
+  ctx.arc(wx, ry - 0.3, 1.7, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Starlight spark above ark
+  ctx.fillStyle = `rgba(255, 251, 235, ${0.55 + pulse * 0.45})`;
+  ctx.beginPath();
+  ctx.arc(wx, ry - 11.5 - pulse * 2.5, 1.5 + pulse * 0.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBuildingRallyAndRange(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  selectedBuildingId: number | null,
+  selectedUnitIds: readonly number[],
+  animSec: number,
+) {
+  if (selectedBuildingId !== null) {
+    const b = state.buildings.find(
+      (bld) => bld.id === selectedBuildingId && bld.team === 'player' && bld.hp > 0,
+    );
+    if (b) {
+      const bSpec = BUILDINGS[b.kind];
+      const cx = b.tileX + b.size * 0.5;
+      const cy = b.tileY + b.size * 0.5;
+      const start = tileToWorld(cx, cy);
+
+      if (bSpec.attackRange > 0) {
+        const range = bSpec.attackRange + (state.spec.playerCiv === 'teutons' ? 1.5 : 0);
+        ctx.save();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = 'rgba(96, 165, 250, 0.45)';
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.ellipse(
+          start.wx,
+          start.wy,
+          range * Math.SQRT2 * (TILE_W / 2),
+          range * Math.SQRT2 * (TILE_H / 2),
+          0,
+          0,
+          Math.PI * 2,
+        );
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (b.kind !== 'homestead' && b.kind !== 'farm' && b.kind !== 'stone_wall') {
+        const end = tileToWorld(b.rallyX, b.rallyY);
+        const wave = Math.sin(animSec * 5.2) * 1.6;
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = 'rgba(253, 224, 71, 0.85)';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(start.wx, start.wy - 8);
+        ctx.lineTo(end.wx, end.wy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.strokeStyle = 'rgba(96, 165, 250, 0.85)';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.ellipse(end.wx, end.wy, 7, 3.6, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(end.wx, end.wy);
+        ctx.lineTo(end.wx, end.wy - 18);
+        ctx.stroke();
+
+        ctx.fillStyle = '#2563eb';
+        ctx.strokeStyle = '#fde047';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(end.wx, end.wy - 17.5);
+        ctx.lineTo(end.wx + 12, end.wy - 14.5 + wave);
+        ctx.lineTo(end.wx + 9.5, end.wy - 11.5 + wave * 0.7);
+        ctx.lineTo(end.wx + 12, end.wy - 8.5 + wave * 0.4);
+        ctx.lineTo(end.wx, end.wy - 7.5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  if (selectedUnitIds.length > 0 && selectedUnitIds.length <= 6) {
+    const selSet = new Set(selectedUnitIds);
+    for (const u of state.units) {
+      if (!selSet.has(u.id) || u.team !== 'player' || u.hp <= 0) continue;
+      if (u.kind !== 'archer' && u.kind !== 'monk' && u.kind !== 'trebuchet') continue;
+      const spec = UNITS[u.kind];
+      const range =
+        u.kind === 'archer' && state.spec.playerCiv === 'britons'
+          ? spec.range + 1.2
+          : spec.range;
+      const center = tileToWorld(u.x, u.y);
+      ctx.save();
+      ctx.setLineDash([4, 5]);
+      ctx.strokeStyle =
+        u.kind === 'monk' ? 'rgba(250, 204, 21, 0.36)' : 'rgba(147, 197, 253, 0.34)';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(
+        center.wx,
+        center.wy,
+        range * Math.SQRT2 * (TILE_W / 2),
+        range * Math.SQRT2 * (TILE_H / 2),
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+function stepAndDrawCombatParticles(
+  ctx: CanvasRenderingContext2D,
+  particles: CombatParticle[],
+  dt: number,
+) {
+  if (particles.length === 0) return;
+  ctx.save();
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.lifeSec += dt;
+    if (p.lifeSec >= p.maxLifeSec) {
+      particles.splice(i, 1);
+      continue;
+    }
+    p.wx += p.vx * dt;
+    p.wy += p.vy * dt;
+    p.z += p.vz * dt;
+    p.vz -= 78 * dt;
+    if (p.z < 0) {
+      p.z = 0;
+      p.vz = -p.vz * 0.32;
+    }
+    const alpha = Math.max(0, 1 - p.lifeSec / p.maxLifeSec);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.wx, p.wy - p.z, p.size, 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -4311,6 +4583,41 @@ function renderDiamondMinimap(
     mctx.stroke();
   }
 
+  // Sacred Relics on minimap
+  if (state.relics) {
+    for (const r of state.relics) {
+      const rx = Math.max(0, Math.min(mapSize - 1, Math.floor(r.x)));
+      const ry = Math.max(0, Math.min(mapSize - 1, Math.floor(r.y)));
+      if (r.owner !== 'player' && state.fog[ry * mapSize + rx] === 0) continue;
+      const { mx, my } = toMini(r.x, r.y);
+      mctx.fillStyle = '#fde047';
+      mctx.strokeStyle = '#78350f';
+      mctx.lineWidth = 0.8;
+      mctx.beginPath();
+      mctx.moveTo(mx, my - 2.6);
+      mctx.lineTo(mx + 2.6, my);
+      mctx.lineTo(mx, my + 2.6);
+      mctx.lineTo(mx - 2.6, my);
+      mctx.closePath();
+      mctx.fill();
+      mctx.stroke();
+    }
+  }
+
+  // Under-attack crimson pulse ring around Player Keep on minimap
+  if (state.timeSec - state.lastUnderAttackHornSec < 4.0) {
+    const playerTc = state.buildings.find((b) => b.team === 'player' && b.kind === 'town_center' && b.hp > 0);
+    if (playerTc) {
+      const { mx, my } = toMini(playerTc.tileX + 1, playerTc.tileY + 1);
+      const pulseR = 4 + ((state.timeSec * 3) % 1) * 5.5;
+      mctx.strokeStyle = 'rgba(248, 113, 113, 0.92)';
+      mctx.lineWidth = 1.5;
+      mctx.beginPath();
+      mctx.arc(mx, my, pulseR, 0, Math.PI * 2);
+      mctx.stroke();
+    }
+  }
+
   // White RTS camera viewport frame
   const topInset = Math.min(48, viewportH * 0.1);
   const botInset = Math.min(115, viewportH * 0.18);
@@ -4343,10 +4650,13 @@ export function IsoCanvas({
   selectedBuildingId,
   placementKind,
   demolishMode = false,
+  rallyMode = false,
+  focusTarget = null,
   onSelectUnits,
   onSelectBuilding,
   onIssueTileOrder,
   onPlaceBuildingAt,
+  onSetRallyPoint,
   onCancelPlacement,
   onDemolishAt,
   showMinimap = true,
@@ -4371,6 +4681,10 @@ export function IsoCanvas({
   placementKindRef.current = placementKind;
   const demolishModeRef = useRef(demolishMode);
   demolishModeRef.current = demolishMode;
+  const rallyModeRef = useRef(rallyMode);
+  rallyModeRef.current = rallyMode;
+  const focusTargetRef = useRef(focusTarget);
+  focusTargetRef.current = focusTarget;
   const showMinimapRef = useRef(showMinimap);
   showMinimapRef.current = showMinimap;
   const interactiveRef = useRef(interactive);
@@ -4381,6 +4695,7 @@ export function IsoCanvas({
     onSelectBuilding,
     onIssueTileOrder,
     onPlaceBuildingAt,
+    onSetRallyPoint,
     onCancelPlacement,
     onDemolishAt,
   });
@@ -4389,6 +4704,7 @@ export function IsoCanvas({
     onSelectBuilding,
     onIssueTileOrder,
     onPlaceBuildingAt,
+    onSetRallyPoint,
     onCancelPlacement,
     onDemolishAt,
   };
@@ -4401,9 +4717,13 @@ export function IsoCanvas({
   const spacePressedRef = useRef(false);
   const arrowKeysRef = useRef({ up: false, down: false, left: false, right: false });
   const lastTapUnitRef = useRef<{ kind: Unit['kind']; timeMs: number } | null>(null);
+  const lastFocusSeqRef = useRef<number>(0);
+  const panGoalRef = useRef<{ wx: number; wy: number } | null>(null);
+  const prevUnitHpRef = useRef<Map<number, { hp: number; x: number; y: number }>>(new Map());
+  const prevBuildingSnapRef = useRef<Map<number, { hp: number; x: number; y: number }>>(new Map());
+  const unitHitFlashRef = useRef<Map<number, number>>(new Map());
+  const particlesRef = useRef<CombatParticle[]>([]);
 
-  const [ghostBanner, setGhostBanner] = useState<GhostBannerSnapshot | null>(null);
-  const ghostBannerKeyRef = useRef<string>('');
   const [isCompactViewport, setIsCompactViewport] = useState<boolean>(false);
 
   const ensureCamera = useCallback((): CameraState => {
@@ -4915,7 +5235,7 @@ export function IsoCanvas({
 
       // Right-click (Desktop)
       if (g.button === 2) {
-        if (placementKindRef.current !== null || demolishModeRef.current) {
+        if (placementKindRef.current !== null || demolishModeRef.current || rallyModeRef.current) {
           callbacksRef.current.onCancelPlacement();
           return;
         }
@@ -4929,11 +5249,32 @@ export function IsoCanvas({
           } else {
             issueSmartOrderAt(tileX, tileY);
           }
+        } else if (
+          selectedBuildingIdRef.current !== null &&
+          callbacksRef.current.onSetRallyPoint
+        ) {
+          const clampedX = Math.max(0, Math.min(state.mapSize - 1, Math.floor(tileX)));
+          const clampedY = Math.max(0, Math.min(state.mapSize - 1, Math.floor(tileY)));
+          callbacksRef.current.onSetRallyPoint(selectedBuildingIdRef.current, clampedX, clampedY);
+          spawnRipple(clampedX, clampedY, 'build');
         }
         return;
       }
 
       if (g.button !== 0) return;
+
+      // Building Rally Mode (Left-click / Mobile Tap)
+      if (
+        rallyModeRef.current &&
+        selectedBuildingIdRef.current !== null &&
+        callbacksRef.current.onSetRallyPoint
+      ) {
+        const clampedX = Math.max(0, Math.min(state.mapSize - 1, Math.floor(tileX)));
+        const clampedY = Math.max(0, Math.min(state.mapSize - 1, Math.floor(tileY)));
+        callbacksRef.current.onSetRallyPoint(selectedBuildingIdRef.current, clampedX, clampedY);
+        spawnRipple(clampedX, clampedY, 'build');
+        return;
+      }
 
       // Building Placement Mode (Left-click / Tap)
       if (placementKindRef.current !== null) {
@@ -5134,15 +5475,29 @@ export function IsoCanvas({
           (state.timeSec < 0.2 && lastMatchTimeRef.current > 1.5))
       ) {
         cameraRef.current = createInitialCamera(w, h, state.mapSize);
+        panGoalRef.current = null;
+        prevUnitHpRef.current.clear();
+        prevBuildingSnapRef.current.clear();
+        unitHitFlashRef.current.clear();
+        particlesRef.current.length = 0;
       }
       lastSeedRef.current = state.spec.seed;
       lastMatchTimeRef.current = state.timeSec;
 
       let cam = ensureCamera();
 
+      // Smooth focus pan when HUD or hotkey targets a tile
+      const ft = focusTargetRef.current;
+      if (ft && ft.seq !== lastFocusSeqRef.current) {
+        lastFocusSeqRef.current = ft.seq;
+        const target = tileToWorld(ft.tileX, ft.tileY);
+        panGoalRef.current = { wx: target.wx, wy: target.wy };
+      }
+
       // Smooth keyboard arrow-key panning
       const keys = arrowKeysRef.current;
       if (keys.up || keys.down || keys.left || keys.right) {
+        panGoalRef.current = null;
         const panSpeed = 320 / cam.zoom;
         const vx = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
         const vy = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
@@ -5153,15 +5508,86 @@ export function IsoCanvas({
           state.mapSize,
         );
         cameraRef.current = cam;
+      } else if (panGoalRef.current) {
+        const dx = panGoalRef.current.wx - cam.wx;
+        const dy = panGoalRef.current.wy - cam.wy;
+        if (Math.hypot(dx, dy) < 2) {
+          cam = clampCamera(
+            { ...cam, wx: panGoalRef.current.wx, wy: panGoalRef.current.wy },
+            w,
+            h,
+            state.mapSize,
+          );
+          panGoalRef.current = null;
+        } else {
+          const factor = Math.min(1, dt * 11);
+          cam = clampCamera(
+            { ...cam, wx: cam.wx + dx * factor, wy: cam.wy + dy * factor },
+            w,
+            h,
+            state.mapSize,
+          );
+        }
+        cameraRef.current = cam;
       }
 
-      // Sync ghostBreach banner state without unnecessary re-renders
-      const gb = state.ghostBreach ?? null;
-      const gbKey = gb ? `${gb.username}:${gb.timeSec}:${gb.tileX}:${gb.tileY}` : '';
-      if (gbKey !== ghostBannerKeyRef.current) {
-        ghostBannerKeyRef.current = gbKey;
-        setGhostBanner(gb ? { ...gb } : null);
+      // Detect combat HP drops and building destruction for 60fps visual sparks
+      const spawnSparks = (
+        tileX: number,
+        tileY: number,
+        count: number,
+        colors: readonly string[],
+        speedScale = 1,
+      ) => {
+        const pool = particlesRef.current;
+        const { wx, wy } = tileToWorld(tileX, tileY);
+        for (let k = 0; k < count && pool.length < 90; k++) {
+          const ang = (k / Math.max(1, count)) * Math.PI * 2 + (nowMs * 0.01 + k) % 1;
+          const spd = (18 + ((k * 17) % 24)) * speedScale;
+          pool.push({
+            wx,
+            wy,
+            vx: Math.cos(ang) * spd,
+            vy: Math.sin(ang) * spd * 0.55,
+            z: 6 + (k % 5),
+            vz: (34 + ((k * 13) % 28)) * speedScale,
+            color: colors[k % colors.length],
+            size: 1.7 + (k % 2) * 0.7,
+            lifeSec: 0,
+            maxLifeSec: 0.42 + (k % 3) * 0.14,
+          });
+        }
+      };
+
+      const nextUnitMap = new Map<number, { hp: number; x: number; y: number }>();
+      for (const u of state.units) {
+        if (u.hp <= 0) continue;
+        nextUnitMap.set(u.id, { hp: u.hp, x: u.x, y: u.y });
+        const prev = prevUnitHpRef.current.get(u.id);
+        if (prev && u.hp < prev.hp) {
+          unitHitFlashRef.current.set(u.id, nowMs + 150);
+          spawnSparks(u.x, u.y, 4, ['#fef08a', '#f97316', '#f8fafc'], 0.9);
+        }
       }
+      prevUnitHpRef.current = nextUnitMap;
+
+      const nextBuildingMap = new Map<number, { hp: number; x: number; y: number }>();
+      for (const b of state.buildings) {
+        if (b.hp <= 0) continue;
+        const bx = b.tileX + b.size * 0.5;
+        const by = b.tileY + b.size * 0.5;
+        nextBuildingMap.set(b.id, { hp: b.hp, x: bx, y: by });
+        const prev = prevBuildingSnapRef.current.get(b.id);
+        if (prev && b.hp < prev.hp) {
+          spawnSparks(bx, by, 5, ['#fde047', '#fb923c', '#e2e8f0'], 1.1);
+        }
+      }
+      for (const [bid, prev] of prevBuildingSnapRef.current) {
+        if (!nextBuildingMap.has(bid)) {
+          spawnSparks(prev.x, prev.y, 12, ['#94a3b8', '#f97316', '#fde047', '#78350f'], 1.35);
+        }
+      }
+      prevBuildingSnapRef.current = nextBuildingMap;
 
       const ctx = canvas.getContext('2d');
       if (!ctx) {
@@ -5277,11 +5703,30 @@ export function IsoCanvas({
         }
       }
 
-      // Track units currently targeted by Monk conversion
+      // Track units currently targeted by Monk conversion & carried Sacred Relics
       const convertedTargetIds = new Set<number>();
       for (const u of state.units) {
         if (u.hp > 0 && u.kind === 'monk' && u.convertTargetId !== null) {
           convertedTargetIds.add(u.convertTargetId);
+        }
+      }
+
+      const carriedRelicUnitIds = new Set<number>();
+      if (state.relics) {
+        for (const r of state.relics) {
+          if (r.carrierUnitId !== null) {
+            carriedRelicUnitIds.add(r.carrierUnitId);
+          } else {
+            const rtx = Math.max(0, Math.min(state.mapSize - 1, Math.floor(r.x)));
+            const rty = Math.max(0, Math.min(state.mapSize - 1, Math.floor(r.y)));
+            if (r.owner === 'player' || state.fog[rty * state.mapSize + rtx] > 0) {
+              renderList.push({
+                kind: 'relic',
+                depth: r.x + r.y + 0.1,
+                relic: r,
+              });
+            }
+          }
         }
       }
 
@@ -5321,6 +5766,8 @@ export function IsoCanvas({
           );
         } else if (item.kind === 'horse') {
           drawWildHorse(ctx, item.horse, animSec);
+        } else if (item.kind === 'relic') {
+          drawSacredRelic(ctx, item.relic, animSec);
         } else {
           drawUnit(
             ctx,
@@ -5328,13 +5775,25 @@ export function IsoCanvas({
             selUnitSet.has(item.unit.id),
             convertedTargetIds.has(item.unit.id),
             animSec,
+            carriedRelicUnitIds.has(item.unit.id),
+            (unitHitFlashRef.current.get(item.unit.id) ?? 0) > nowMs,
           );
         }
       }
 
-      // 5. Monk Golden WOLOLO Faith Beams, Projectiles, Sunlight Motes, Order Ripples, Ghost Breach & Previews
+      // 5. Monk Golden WOLOLO Faith Beams, Projectiles, Combat Sparks, Rally Flags & Previews
       drawMonkWololoBeams(ctx, state.units, state.fog, state.mapSize, animSec);
       drawProjectiles(ctx, state.projectiles, state.fog, state.mapSize, animSec);
+      stepAndDrawCombatParticles(ctx, particlesRef.current, dt);
+      if (interactiveRef.current) {
+        drawBuildingRallyAndRange(
+          ctx,
+          state,
+          selBldId,
+          selectedUnitIdsRef.current,
+          animSec,
+        );
+      }
       drawMeadowSunlightMotes(ctx, state, animSec);
       drawOrderRipples(ctx, ripplesRef.current, nowMs);
 
@@ -5395,19 +5854,6 @@ export function IsoCanvas({
     return () => cancelAnimationFrame(rafId);
   }, [computeSnappedPlacement, ensureCamera, stateRef]);
 
-  const handleFocusGhostBreach = useCallback(() => {
-    if (!ghostBanner) return;
-    const cam = ensureCamera();
-    const { width, height } = viewportRef.current;
-    const target = tileToWorld(ghostBanner.tileX + 0.5, ghostBanner.tileY + 0.5);
-    cameraRef.current = clampCamera(
-      { ...cam, wx: target.wx, wy: target.wy },
-      width || 800,
-      height || 600,
-      stateRef.current.mapSize,
-    );
-  }, [ensureCamera, ghostBanner, stateRef]);
-
   const miniW = isCompactViewport ? 114 : 138;
   const miniH = isCompactViewport ? 74 : 88;
 
@@ -5423,7 +5869,7 @@ export function IsoCanvas({
         pointerEvents: interactive ? 'auto' : 'none',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        cursor: !interactive ? 'default' : placementKind || demolishMode ? 'crosshair' : 'default',
+        cursor: !interactive ? 'default' : placementKind || demolishMode || rallyMode ? 'crosshair' : 'default',
       }}
     >
       <canvas
@@ -5435,42 +5881,6 @@ export function IsoCanvas({
           touchAction: interactive ? 'none' : 'auto',
         }}
       />
-
-      {/* Rival Ghost Breach Banner */}
-      {interactive && ghostBanner && (
-        <button
-          type="button"
-          onClick={handleFocusGhostBreach}
-          style={{
-            position: 'absolute',
-            top: 56,
-            left: 10,
-            zIndex: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            maxWidth: isCompactViewport ? 'calc(100% - 142px)' : 340,
-            padding: '5px 10px',
-            borderRadius: 8,
-            border: '1px solid rgba(192, 132, 252, 0.65)',
-            background: 'linear-gradient(180deg, rgba(30, 18, 48, 0.92), rgba(17, 12, 28, 0.92))',
-            color: '#f3e8ff',
-            fontSize: 12,
-            fontWeight: 700,
-            boxShadow: '0 4px 14px rgba(0, 0, 0, 0.45)',
-            cursor: 'pointer',
-            textAlign: 'left',
-          }}
-          title="Click to inspect Rival Ghost breach location"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
-            <path d="M9.5 1.5L3.5 9h4l-1 5.5L12.5 7h-4l1-5.5z" fill="#d8b4fe" stroke="#9333ea" strokeWidth="1" strokeLinejoin="round" />
-          </svg>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            u/{ghostBanner.username} breached ({formatClock(ghostBanner.timeSec)})
-          </span>
-        </button>
-      )}
 
       {/* Sleek Translucent Frosted-Glass Diamond Minimap + Camera Controls (top: 52px, right: 10px) */}
       {interactive && (

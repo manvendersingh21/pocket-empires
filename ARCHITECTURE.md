@@ -11,8 +11,8 @@ Pocket Empires is structured around the **Inverted Trust Pyramid** so that corre
 | Trust Layer | Surface Area | Verification Harness | Guarantees Enforced |
 |---|---|---|---|
 | **Layer 1 — Human Taste & Playfeel** | Narrowest (Top) | Golden visual review & live playtest (`--screenshots <dir>`) | Tactile *Age of Empires II* stone-and-brass readability, crisp pacing, and audio/visual punch |
-| **Layer 2 — Deterministic Static & Type Gates** | Medium | `npm run typecheck` + `node scripts/check-invariants.mjs` | **7 zero-dependency architectural rules** enforcing engine purity, client/server isolation, WebView CSP, repo isolation, zero tofu glyphs, zero timing hacks, and zero raw `useEffect` in product UI |
-| **Layer 3 — Automated Property & Runtime Verification** | Broadest (Base) | `npm test` (`tests/*.test.ts`, `tests/property.test.ts`), `npm run verify:levels`, `node scripts/verify-runtime.mjs` | 50-seed 180°-symmetry & bidirectional A* fuzzing, 300-tick command fuzzing across absorbing terminal states, 30-day level solvability, and real Chromium desktop/mobile/splash E2E flows with `0` console/page errors |
+| **Layer 2 — Deterministic Static & Type Gates** | Medium | `npm run typecheck` + `node scripts/check-invariants.mjs` | **8 zero-dependency architectural rules** enforcing engine purity, client/server isolation, WebView CSP, repo isolation, zero tofu glyphs, zero timing hacks, zero raw `useEffect` in product UI, and Devvit deployment manifest alignment |
+| **Layer 3 — Automated Property & Runtime Verification** | Broadest (Base) | `npm test` (`tests/*.test.ts`, `tests/property.test.ts`), `npm run verify:levels`, `node scripts/verify-runtime.mjs` | 50-seed 180°-symmetry (tiles, resources, Sacred Relics) & bidirectional A* fuzzing, 300-tick command fuzzing across absorbing terminal states, 30-day level solvability, and real Chromium desktop/mobile/splash E2E flows with mounted Redis API routes and `0` console/page errors |
 
 ---
 
@@ -23,8 +23,8 @@ Unidirectional module dependencies strictly separate the **pure headless 20 Hz R
 ```mermaid
 flowchart TD
   subgraph PureCore["Pure Headless Core (Enforced by ARCH_ENGINE_PURE)"]
-    Types["src/types (rts.ts · Domain Specs, 6 Civs, 6 Biomes, Units & Buildings)"]
-    Engine["src/engine (rng.ts · pathfinding.ts · dailyGenerator.ts · sim.ts)"]
+    Types["src/types (rts.ts · Domain Specs, 6 Civs, 6 Biomes, Relics, Difficulties)"]
+    Engine["src/engine (rng.ts · pathfinding.ts · dailyGenerator.ts · sim.ts · dailyBounties.ts · career.ts · leaderboardModel.ts)"]
     Types --> Engine
   end
 
@@ -72,8 +72,9 @@ flowchart TD
 - **`src/types` -> `src/engine`:** Pure TypeScript data structures and deterministic `stepGame(state, dt)` / `cmd*` transitions. Zero imports from `react`, `@devvit/*`, DOM APIs, or upper layers.
 - **`{src/rendering, src/ui, src/ai, src/client}`:** Reads `GameState` snapshots and issues deterministic `cmd*` mutations. Product `.tsx` modules never call raw `useEffect` or `setTimeout`; lifecycle orchestration is centralized in `src/client/hooks.ts`, Canvas animations use `requestAnimationFrame`, and local `window.LanguageModel` probing uses a single bounded timeout inside `src/ai/hybridAdvisor.ts`.
 - **`/api/empire/*` -> `src/server`:**
-  - `GET /api/empire/daily?date=YYYY-MM-DD` loads top-15 Redis leaderboard standings, community telemetry, and active player streak/rank.
-  - `POST /api/empire/complete` atomically updates `empire:daily:{date}:stats`, `empire:daily:{date}:board`, and `empire:player:{username}`, then awards dynamic Subreddit User Flair (`👑 Siege Victor` / `🧙 Wololo Lord`) via `reddit.setUserFlair`.
+  - `GET /api/empire/daily?date=YYYY-MM-DD` loads top-15 Redis daily standings, Imperial Hall of Fame, community telemetry, and active player streak/rank.
+  - `GET /api/empire/leaderboard?date=YYYY-MM-DD` serves the unified 3-League Leaderboard Hub (Today's Siege, Imperial Hall of Fame, Raid Citadels).
+  - `POST /api/empire/complete` atomically updates `empire:daily:{date}:stats`, `empire:daily:{date}:board`, `empire:player:{username}`, and `empire:hall_of_fame` (anti-crown-farming protected), then awards dynamic Subreddit User Flair (`👑 Siege Victor` / `🧙 Wololo Lord`) via `reddit.setUserFlair`.
   - `POST /api/empire/comment` posts spoiler-free War Chronicles to the Reddit thread via `reddit.submitComment` guarded by an idempotency key (`empire:comment:{postId}:{date}:{username}`).
 
 ---
@@ -201,3 +202,4 @@ All **7 static & architectural rules** execute in `< 100ms` with zero external d
 | **5** | `ZERO_TOFU_GLYPHS` | `src/ui/*.tsx`, `src/rendering/*.tsx`, `src/client/*.tsx`, `src/engine/sim.ts` (`addCallout`) | Forbids raw Unicode `\p{Extended_Pictographic}` emojis in WebView JSX or 2D Canvas callouts (preventing Linux/WebView `□` tofu boxes) | Render crisp vector heraldry with `<EmpireIcon />` and `<CivCrest />` (`src/ui/EmpireIcons.tsx`) and sanitize dynamic strings with `stripEmoji()` |
 | **6** | `NO_SLOP_COMMENTS_OR_TIMING_HACKS` | All `src/**` (comments + `setTimeout(`) | Bans `HACK`, `WORKAROUND`, `FIXME`, and `DO NOT DELETE` comments across `src/`, and bans `setTimeout(` across `src/engine/*`, `src/rendering/*`, `src/client/*`, and `src/ui/*` (permitting only bounded local-model timeout in `src/ai/hybridAdvisor.ts`) | Advance gameplay timers deterministically in `stepGame(state, dt)` (`src/engine/sim.ts`) and drive UI/Canvas transitions via `requestAnimationFrame` or CSS animations |
 | **7** | `NO_RAW_USE_EFFECT_IN_PRODUCT` | `src/ui/*.tsx`, `src/client/App.tsx`, `src/client/splash.tsx` | Forbids importing or calling `useEffect` directly inside product UI components and app entrypoints | Compute derived state synchronously during render, or use vetted lifecycle primitives in `src/client/hooks.ts` (`useMountTask`, `useFixedSimulationLoop`, `useWindowKeydown`) |
+| **8** | `DEVVIT_PRODUCTION_CONTRACT` | `devvit.json`, `package.json`, `src/server/index.ts` | Validates Reddit Devvit deployment entrypoints, `redis`/`reddit` permissions, menu/trigger routes, and full client+engine `typecheck` script | Keep `devvit.json`, `src/server/index.ts`, and `package.json` `typecheck` strictly synchronized before `npx devvit upload` |

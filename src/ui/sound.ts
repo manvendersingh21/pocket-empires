@@ -37,6 +37,9 @@ const EVENT_COOLDOWN_MS: Record<SoundEventKind, number> = {
   war_horn: 260,
   age_up: 400,
   trebuchet_fire: 160,
+  relic_capture: 260,
+  town_bell: 320,
+  rally_set: 80,
   victory: 400,
   defeat: 400,
 };
@@ -1253,6 +1256,62 @@ function patchTrebuchetFire(b: AudioBus): void {
   });
 }
 
+/** 15b. 'relic_capture': Shimmering celestial relic bell chord (D5 -> F#5 -> A5 -> D6). */
+function patchRelicCapture(b: AudioBus): void {
+  const t = b.ctx.currentTime;
+  const chord = [587.33, 739.99, 880.0, 1174.66];
+  for (let i = 0; i < chord.length; i++) {
+    scheduleBell(b, chord[i], t + i * 0.055, 0.52, 0.12);
+  }
+  scheduleTone(b, {
+    freqStart: 1479.98,
+    start: t + 0.18,
+    attack: 0.04,
+    duration: 0.45,
+    type: 'sine',
+    gain: 0.06,
+  });
+}
+
+/** 15c. 'town_bell': Urgent triple medieval bronze Town Center alarm bell. */
+function patchTownBell(b: AudioBus): void {
+  const t = b.ctx.currentTime;
+  scheduleBell(b, 523.25, t, 0.44, 0.22);
+  scheduleBell(b, 523.25, t + 0.17, 0.44, 0.21);
+  scheduleBell(b, 659.25, t + 0.34, 0.56, 0.23);
+}
+
+/** 15d. 'rally_set': Crisp wooden banner-pole plant + cloth snap. */
+function patchRallySet(b: AudioBus): void {
+  const t = b.ctx.currentTime;
+  scheduleTone(b, {
+    freqStart: 220,
+    freqEnd: 95,
+    start: t,
+    attack: 0.002,
+    duration: 0.065,
+    type: 'triangle',
+    gain: 0.14,
+  });
+  scheduleNoise(b, {
+    start: t + 0.012,
+    attack: 0.004,
+    duration: 0.05,
+    gain: 0.1,
+    filterType: 'bandpass',
+    freqStart: 1900,
+    q: 2.0,
+  });
+  scheduleTone(b, {
+    freqStart: 587.33,
+    start: t + 0.015,
+    attack: 0.004,
+    duration: 0.09,
+    type: 'sine',
+    gain: 0.08,
+  });
+}
+
 /** 15. 'victory': Royal medieval brass fanfare + kettledrum & crown chime! */
 function patchVictory(b: AudioBus): void {
   const t = b.ctx.currentTime;
@@ -1489,6 +1548,15 @@ export function playSoundEvent(kind: SoundEventKind): void {
         break;
       case 'trebuchet_fire':
         patchTrebuchetFire(b);
+        break;
+      case 'relic_capture':
+        patchRelicCapture(b);
+        break;
+      case 'town_bell':
+        patchTownBell(b);
+        break;
+      case 'rally_set':
+        patchRallySet(b);
         break;
       case 'victory':
         patchVictory(b);

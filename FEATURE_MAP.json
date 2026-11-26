@@ -201,5 +201,68 @@
     "file": "src/ui/ChronicleModal.tsx",
     "selectorRoleOrText": "[data-testid=\"chronicle-modal\"]",
     "description": "Translucent frosted-glass end-state Siege Chronicle modal with 1-3 Crowns and Post War Chronicle to Comments CTA."
+  },
+  "home_leaderboard_btn": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "[data-testid=\"home-leaderboard-btn\"]",
+    "description": "One-tap Home War Room button opening the 3-League Leaderboard Hub (Today's Siege, Hall of Fame, Raid Citadels)."
+  },
+  "war_room_difficulty_bar": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "[data-testid=\"war-room-difficulty-bar\"]",
+    "description": "Three-tier War Room difficulty selector (Standard 1x, Veteran 1.2x, Imperial 1.35x)."
+  },
+  "war_room_bounties": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "[data-testid=\"war-room-bounties\"]",
+    "description": "Daily rotating 3 Royal Bounties progress strip awarding +200 score bonuses."
+  },
+  "war_room_week_strip": {
+    "route": "/game.html#war_room",
+    "component": "WarRoomScreen",
+    "file": "src/ui/WarRoomScreen.tsx",
+    "selectorRoleOrText": "[data-testid=\"war-room-week-strip\"]",
+    "description": "Seven-day Crown streak calendar strip allowing instant replay of past daily sieges."
+  },
+  "leaderboard_league_tabs": {
+    "route": "/game.html#settings",
+    "component": "SettingsModal",
+    "file": "src/ui/SettingsModal.tsx",
+    "selectorRoleOrText": "[data-testid=\"leaderboard-league-tabs\"]",
+    "description": "Three-League segmented tab bar switching between Today's Siege, Imperial Hall of Fame, and Raid Citadels."
+  },
+  "hud_keep_btn": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-keep-btn\"]",
+    "description": "Quick-select Keep pill centering camera on the Player Town Center and opening its inspector."
+  },
+  "hud_selection_inspector": {
+    "route": "/game.html#game",
+    "component": "EmpireHud",
+    "file": "src/ui/EmpireHud.tsx",
+    "selectorRoleOrText": "[data-testid=\"hud-selection-inspector\"]",
+    "description": "Contextual unit & building inspector showing HP, training queue refund chips, Rally Point, and Town Bell controls."
+  },
+  "chronicle_rival_banner": {
+    "route": "/game.html#game",
+    "component": "ChronicleModal",
+    "file": "src/ui/ChronicleModal.tsx",
+    "selectorRoleOrText": "[data-testid=\"chronicle-rival-banner\"]",
+    "description": "Post-match Rival Challenge banner showing live daily rank and exact point gap to overtake the next commander."
+  },
+  "chronicle_momentum_chart": {
+    "route": "/game.html#game",
+    "component": "ChronicleModal",
+    "file": "src/ui/ChronicleModal.tsx",
+    "selectorRoleOrText": "[data-testid=\"chronicle-momentum-chart\"]",
+    "description": "AoE II style SVG Battle Momentum timeline comparing Blue Empire and Rival Keep power curves."
   }
 }

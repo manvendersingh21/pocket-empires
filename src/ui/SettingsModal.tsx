@@ -4,18 +4,30 @@ import {
   CIVS,
   DAILY_MODIFIERS,
   TAUNTS,
+  type PlayerBaseBlueprint,
   type SkirmishSpec,
   type TauntId,
 } from '../types/rts.js';
+import {
+  createEmptyCareerProfile,
+  getCareerRankInfo,
+  type CareerProfile,
+} from '../engine/career.js';
 import {
   decodeSkirmishCode,
   encodeSkirmishCode,
   generateDailySpec,
 } from '../engine/dailyGenerator.js';
+import {
+  buildLiveDailyStandings,
+  computeRivalChallenge,
+} from '../engine/leaderboardModel.js';
+import type { HallOfFameEntry } from '../shared/messages.js';
 import { CivCrest, EmpireIcon, stripEmoji } from './EmpireIcons.js';
 import type { CommunityWarStats, LeaderboardRow } from './WarRoomScreen.js';
 
 export type SettingsTabId = 'settings' | 'ranks' | 'forge';
+export type LeagueSubTabId = 'daily' | 'hall' | 'raids';
 
 export interface SettingsModalProps {
   open: boolean;
@@ -26,7 +38,7 @@ export interface SettingsModalProps {
   inMatch?: boolean;
   muted?: boolean;
   onToggleMute?: () => void;
-  gameSpeed?: 1 | 1.5;
+  gameSpeed?: 1 | 1.5 | 2;
   onToggleSpeed?: () => void;
   showMinimap?: boolean;
   minimapVisible?: boolean;
@@ -41,10 +53,14 @@ export interface SettingsModalProps {
   bestScore?: number | null;
   rank?: number | null;
   leaderboard?: LeaderboardRow[];
+  hallOfFame?: HallOfFameEntry[];
+  playerBases?: PlayerBaseBlueprint[];
+  career?: CareerProfile;
   community?: CommunityWarStats;
   aiModeLabel?: string;
 
-  // Archive & Custom Skirmish Forge Callbacks
+  // Archive, Raid & Custom Skirmish Forge Callbacks
+  onRaidPlayerBase?: (base: PlayerBaseBlueprint) => void;
   onPlayCustomSpec: (spec: SkirmishSpec) => void;
   onCraftPrompt: (
     prompt: string,
@@ -139,7 +155,7 @@ const SETTINGS_CSS = `
 .pe-settings-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 75;
+  z-index: 90;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -404,12 +420,17 @@ export function SettingsModal({
   bestScore = null,
   rank = null,
   leaderboard = [],
+  hallOfFame = [],
+  playerBases = [],
+  career,
   community,
   aiModeLabel,
+  onRaidPlayerBase,
   onPlayCustomSpec,
   onCraftPrompt,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab);
+  const [leagueTab, setLeagueTab] = useState<LeagueSubTabId>('daily');
   const [wasOpen, setWasOpen] = useState(open);
   const [promptInput, setPromptInput] = useState('');
   const [codeInput, setCodeInput] = useState('');
@@ -426,6 +447,7 @@ export function SettingsModal({
     setWasOpen(open);
     if (open) {
       setActiveTab(initialTab);
+      setLeagueTab('daily');
     }
   }
 
@@ -435,6 +457,27 @@ export function SettingsModal({
   const exitHandler = onExitToMainMenu ?? onExitToWarRoom;
   const isInMatch = inMatch ?? Boolean(exitHandler);
   const copiedCode = crafted !== null && copiedCodeValue === crafted.shareCode;
+  const careerProfile = career ?? createEmptyCareerProfile();
+  const careerRank = getCareerRankInfo(careerProfile.xp);
+  const todayRec = careerProfile.days[dailySpec.dateKey];
+  const localBestRow =
+    bestScore !== null
+      ? {
+          username: 'You',
+          score: bestScore,
+          timeSec: todayRec?.bestTimeSec ?? dailySpec.parSec,
+          crowns: todayRec?.crowns ?? 1,
+          strategy: 'Your Best',
+          wololos: 0,
+        }
+      : null;
+  const liveStandings = buildLiveDailyStandings(dailySpec, leaderboard, localBestRow, rank);
+  const rivalChallenge = computeRivalChallenge(
+    liveStandings,
+    bestScore,
+    todayRec?.bestTimeSec ?? null,
+    dailySpec.parSec,
+  );
 
   const pastSieges = [1, 2, 3, 4].map((daysAgo) =>
     generateDailySpec(shiftDateKey(dailySpec.dateKey, -daysAgo)),
@@ -611,11 +654,11 @@ export function SettingsModal({
                   <button
                     type="button"
                     data-testid="settings-toggle-speed"
-                    aria-pressed={gameSpeed === 1.5}
-                    className={`pe-glass-toggle-btn pe-settings-tabular ${gameSpeed === 1.5 ? 'pe-glass-toggle-on' : ''}`}
+                    aria-pressed={gameSpeed > 1}
+                    className={`pe-glass-toggle-btn pe-settings-tabular ${gameSpeed > 1 ? 'pe-glass-toggle-on' : ''}`}
                     onClick={() => onToggleSpeed?.()}
                   >
-                    <span>{gameSpeed === 1.5 ? '1.5×' : '1×'}</span>
+                    <span>{gameSpeed === 2 ? '2×' : gameSpeed === 1.5 ? '1.5×' : '1×'}</span>
                   </button>
                 </div>
 
@@ -712,6 +755,31 @@ export function SettingsModal({
                 )}
               </div>
 
+              {/* Compact RTS Hotkeys Reference */}
+              <div
+                className="pe-settings-tabular"
+                style={{
+                  padding: '8px 11px',
+                  borderRadius: '11px',
+                  background: 'rgba(255, 255, 255, 0.035)',
+                  border: '1px solid rgba(255, 255, 255, 0.09)',
+                  fontSize: '10.5px',
+                  color: 'rgba(203, 213, 225, 0.78)',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '6px 10px',
+                }}
+              >
+                <span style={{ color: '#fde68a', fontWeight: 800 }}>Hotkeys:</span>
+                <span>[.] Idle Villager</span>
+                <span>[H] Keep</span>
+                <span>[B] Town Bell</span>
+                <span>[G] Castle Age</span>
+                <span>[Space] Focus</span>
+                <span>[Ctrl+1..4] Control Groups</span>
+                <span>[Right-Click] Order / Rally</span>
+              </div>
+
               {/* Exit to Main Menu (when in a match) */}
               {isInMatch && (
                 <button
@@ -746,71 +814,335 @@ export function SettingsModal({
 
           {activeTab === 'ranks' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {community && (
-                <div
-                  className="pe-settings-tabular"
-                  style={{
-                    padding: '7px 11px',
-                    borderRadius: '10px',
-                    background: 'rgba(255, 255, 255, 0.045)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '6px 10px',
-                    fontSize: '11px',
-                    color: 'rgba(226, 232, 240, 0.8)',
-                  }}
-                >
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                    <EmpireIcon name="swords" size={12} />
-                    <span>
-                      <strong style={{ color: '#f8fafc' }}>{community.totalPlays.toLocaleString()}</strong> besieged ·
-                    </span>
-                    <EmpireIcon name="wololo" size={12} />
-                    <span>
-                      <strong style={{ color: '#fde68a' }}>{community.totalWololos.toLocaleString()}</strong> Wololo’d
-                    </span>
+              {/* Commander Career Rank Summary + Community Pulse */}
+              <div
+                className="pe-settings-tabular"
+                style={{
+                  padding: '8px 11px',
+                  borderRadius: '11px',
+                  background: 'rgba(245, 166, 35, 0.1)',
+                  border: '1px solid rgba(253, 224, 71, 0.28)',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '6px 10px',
+                  fontSize: '11px',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 800, color: '#fef3c7' }}>
+                  <EmpireIcon name="medal" size={13} />
+                  <span>
+                    Lv.{careerRank.level} {careerRank.title} · {careerProfile.totalCrowns} Crowns ·{' '}
+                    {careerProfile.totalWins} Wins
                   </span>
-                  {community.topStrategy && (
-                    <span>
-                      Meta: <strong style={{ color: '#f8fafc' }}>{stripEmoji(community.topStrategy)}</strong>
-                    </span>
+                </span>
+                {community && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', color: 'rgba(226, 232, 240, 0.82)' }}>
+                    <EmpireIcon name="swords" size={11} />
+                    <span>{community.totalPlays.toLocaleString()} played ·</span>
+                    <EmpireIcon name="wololo" size={11} />
+                    <span>{community.totalWololos.toLocaleString()} Wololo</span>
+                  </span>
+                )}
+              </div>
+
+              {/* 3-League Segmented Tabs */}
+              <div
+                data-testid="leaderboard-league-tabs"
+                className="pe-settings-tabs"
+                style={{ margin: 0 }}
+                role="group"
+                aria-label="Leaderboard Leagues"
+              >
+                <button
+                  type="button"
+                  data-testid="league-tab-daily"
+                  aria-pressed={leagueTab === 'daily'}
+                  className={`pe-settings-tab ${leagueTab === 'daily' ? 'pe-settings-tab-active' : ''}`}
+                  onClick={() => setLeagueTab('daily')}
+                >
+                  <EmpireIcon name="trophy" size={12} />
+                  <span>Today&apos;s Siege</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="league-tab-hall"
+                  aria-pressed={leagueTab === 'hall'}
+                  className={`pe-settings-tab ${leagueTab === 'hall' ? 'pe-settings-tab-active' : ''}`}
+                  onClick={() => setLeagueTab('hall')}
+                >
+                  <EmpireIcon name="crown" size={12} />
+                  <span>Hall of Fame</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="league-tab-raids"
+                  aria-pressed={leagueTab === 'raids'}
+                  className={`pe-settings-tab ${leagueTab === 'raids' ? 'pe-settings-tab-active' : ''}`}
+                  onClick={() => setLeagueTab('raids')}
+                >
+                  <EmpireIcon name="swords" size={12} />
+                  <span>Raid Citadels</span>
+                </button>
+              </div>
+
+              {leagueTab === 'daily' && (
+                <>
+                  {/* Psychological Rival Target Banner */}
+                  <div
+                    className="pe-settings-tabular"
+                    style={{
+                      padding: '7px 10px',
+                      borderRadius: '10px',
+                      background: 'rgba(37, 99, 235, 0.14)',
+                      border: '1px solid rgba(147, 197, 253, 0.34)',
+                      fontSize: '11px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, color: '#fef3c7' }}>{stripEmoji(rivalChallenge.headline)}</div>
+                    <div style={{ fontSize: '10.5px', color: 'rgba(226, 232, 240, 0.8)', marginTop: '2px' }}>
+                      {stripEmoji(rivalChallenge.subline)}
+                    </div>
+                  </div>
+
+                  {/* Daily Leaderboard Standings */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {liveStandings.slice(0, 10).map((row, idx) => {
+                      const pos = idx + 1;
+                      const medalColor =
+                        pos === 1 ? '#fde047' : pos === 2 ? '#e2e8f0' : pos === 3 ? '#fb923c' : '#94a3b8';
+                      return (
+                        <div
+                          key={`${row.username}-${idx}`}
+                          className="pe-settings-tabular"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                            padding: '6.5px 10px',
+                            borderRadius: '10px',
+                            background: row.isPlayer
+                              ? 'rgba(37, 99, 235, 0.22)'
+                              : pos === 1
+                                ? 'rgba(245, 166, 35, 0.14)'
+                                : 'rgba(255, 255, 255, 0.045)',
+                            border: row.isPlayer
+                              ? '1px solid rgba(96, 165, 250, 0.65)'
+                              : pos === 1
+                                ? '1px solid rgba(253, 224, 71, 0.38)'
+                                : '1px solid rgba(255, 255, 255, 0.1)',
+                            fontSize: '11.5px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 900, color: medalColor, minWidth: '22px' }}>
+                              #{pos}
+                            </span>
+                            <span style={{ fontWeight: 700, color: '#f8fafc' }}>
+                              {row.isPacesetter ? stripEmoji(row.username) : `u/${stripEmoji(row.username)}`}
+                            </span>
+                            {row.isPacesetter && (
+                              <span style={{ fontSize: '9.5px', padding: '1px 5px', borderRadius: '999px', background: 'rgba(255,255,255,0.09)', color: '#cbd5e1', fontWeight: 700 }}>
+                                Pacesetter
+                              </span>
+                            )}
+                            <span style={{ color: 'rgba(203, 213, 225, 0.78)' }}>
+                              · {formatMmSs(row.timeSec)}
+                            </span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                              · {renderCrowns(row.crowns)}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                padding: '1px 6px',
+                                borderRadius: '999px',
+                                background: 'rgba(255, 255, 255, 0.08)',
+                                color: '#e2e8f0',
+                              }}
+                            >
+                              {stripEmoji(row.strategy)}
+                            </span>
+                          </div>
+                          <span style={{ fontWeight: 800, color: '#fde68a', flexShrink: 0 }}>
+                            {row.score.toLocaleString()}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Past 4 Daily Chronicles Practice Archive */}
+                  <div
+                    style={{
+                      marginTop: '4px',
+                      paddingTop: '8px',
+                      borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '5px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontSize: '10.5px',
+                          fontWeight: 800,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.07em',
+                          color: '#fde68a',
+                        }}
+                      >
+                        <EmpireIcon name="scroll" size={12} />
+                        <span>Past Daily Chronicles · Practice</span>
+                      </span>
+                      <span style={{ fontSize: '10.5px', color: 'rgba(203, 213, 225, 0.6)' }}>
+                        Unranked
+                      </span>
+                    </div>
+
+                    {pastSieges.map((pastSpec, idx) => {
+                      const pCiv = CIVS[pastSpec.playerCiv];
+                      const eCiv = CIVS[pastSpec.enemyCiv];
+                      const dayCrowns = careerProfile.days[pastSpec.dateKey]?.crowns ?? 0;
+                      return (
+                        <div
+                          key={pastSpec.dateKey}
+                          className="pe-settings-tabular"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                            padding: '6px 9px',
+                            borderRadius: '10px',
+                            background: 'rgba(255, 255, 255, 0.04)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            fontSize: '11.5px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0, flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 800, color: '#fde68a' }}>
+                              #{pastSpec.puzzleNumber}
+                            </span>
+                            <span style={{ fontWeight: 700, color: '#f8fafc' }}>
+                              {pastSpec.mapName}
+                            </span>
+                            {dayCrowns > 0 && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                {renderCrowns(dayCrowns)}
+                              </span>
+                            )}
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: 'rgba(203, 213, 225, 0.78)' }}>
+                              · <CivCrest civ={pastSpec.playerCiv} size={12} />
+                              <span>{pCiv.name} vs</span>
+                              <CivCrest civ={pastSpec.enemyCiv} size={12} />
+                              <span>{eCiv.name}</span>
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            data-testid={`archive-play-${idx}`}
+                            className="pe-glass-action-btn"
+                            style={{ padding: '5px 10px', fontSize: '11px', flexShrink: 0 }}
+                            onClick={() => {
+                              onPlayCustomSpec({ ...pastSpec, isCustom: true });
+                              onClose();
+                            }}
+                          >
+                            <EmpireIcon name="swords" size={11} />
+                            <span>Practice</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {leagueTab === 'hall' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                  {hallOfFame.length === 0 ? (
+                    <div
+                      style={{
+                        padding: '14px 12px',
+                        textAlign: 'center',
+                        color: 'rgba(203, 213, 225, 0.82)',
+                        fontSize: '12px',
+                        background: 'rgba(255, 255, 255, 0.04)',
+                        borderRadius: '11px',
+                        border: '1px dashed rgba(255, 255, 255, 0.16)',
+                      }}
+                    >
+                      {careerProfile.totalCrowns > 0
+                        ? `Your Career Record: ${careerProfile.totalCrowns} Crowns · ${careerProfile.totalWins} Wins (${careerRank.title}). Win Today's Siege on Reddit to enter the Subreddit Hall of Fame!`
+                        : 'Conquer Daily Sieges to build permanent Crowns and enter the Imperial Hall of Fame!'}
+                    </div>
+                  ) : (
+                    hallOfFame.slice(0, 12).map((row, idx) => {
+                      const pos = idx + 1;
+                      const medalColor =
+                        pos === 1 ? '#fde047' : pos === 2 ? '#e2e8f0' : pos === 3 ? '#fb923c' : '#94a3b8';
+                      return (
+                        <div
+                          key={`${row.username}-${idx}`}
+                          className="pe-settings-tabular"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                            padding: '7px 10px',
+                            borderRadius: '10px',
+                            background: pos === 1 ? 'rgba(245, 166, 35, 0.14)' : 'rgba(255, 255, 255, 0.045)',
+                            border: pos === 1 ? '1px solid rgba(253, 224, 71, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                            fontSize: '11.5px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', minWidth: 0 }}>
+                            <span style={{ fontWeight: 900, color: medalColor, minWidth: '22px' }}>#{pos}</span>
+                            <span style={{ fontWeight: 800, color: '#f8fafc' }}>u/{stripEmoji(row.username)}</span>
+                            <span style={{ color: 'rgba(203, 213, 225, 0.78)' }}>
+                              · {row.wins}W · {row.bestStreak}d Max Streak
+                            </span>
+                          </div>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 900, color: '#fde68a', flexShrink: 0 }}>
+                            <EmpireIcon name="crown" size={12} />
+                            <span>{row.totalCrowns}</span>
+                          </span>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               )}
 
-              {/* Leaderboard */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                {leaderboard.length === 0 ? (
-                  <div
-                    style={{
-                      padding: '14px 12px',
-                      textAlign: 'center',
-                      color: 'rgba(203, 213, 225, 0.72)',
-                      fontSize: '12px',
-                      background: 'rgba(255, 255, 255, 0.04)',
-                      borderRadius: '11px',
-                      border: '1px dashed rgba(255, 255, 255, 0.16)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <EmpireIcon name="keep" size={14} />
-                    <span>No commanders on today’s leaderboard yet — claim #1!</span>
-                  </div>
-                ) : (
-                  leaderboard.slice(0, 8).map((row, idx) => {
-                    const pos = idx + 1;
-                    const medalColor =
-                      pos === 1 ? '#fde047' : pos === 2 ? '#e2e8f0' : pos === 3 ? '#fb923c' : '#94a3b8';
-                    return (
+              {leagueTab === 'raids' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                  {playerBases.length === 0 ? (
+                    <div
+                      style={{
+                        padding: '14px 12px',
+                        textAlign: 'center',
+                        color: 'rgba(203, 213, 225, 0.78)',
+                        fontSize: '12px',
+                        background: 'rgba(255, 255, 255, 0.04)',
+                        borderRadius: '11px',
+                        border: '1px dashed rgba(255, 255, 255, 0.16)',
+                      }}
+                    >
+                      No Raid Citadels loaded yet — open My Base to publish your own keep!
+                    </div>
+                  ) : (
+                    playerBases.slice(0, 12).map((b, idx) => (
                       <div
-                        key={`${row.username}-${idx}`}
+                        key={`${b.owner}-${idx}`}
                         className="pe-settings-tabular"
                         style={{
                           display: 'flex',
@@ -819,134 +1151,44 @@ export function SettingsModal({
                           gap: '8px',
                           padding: '7px 10px',
                           borderRadius: '10px',
-                          background:
-                            pos === 1
-                              ? 'rgba(245, 166, 35, 0.14)'
-                              : 'rgba(255, 255, 255, 0.045)',
-                          border:
-                            pos === 1
-                              ? '1px solid rgba(253, 224, 71, 0.38)'
-                              : '1px solid rgba(255, 255, 255, 0.1)',
-                          fontSize: '12px',
+                          background: 'rgba(255, 255, 255, 0.045)',
+                          border: '1px solid rgba(255, 255, 255, 0.1)',
+                          fontSize: '11.5px',
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 900, color: medalColor, minWidth: '22px' }}>
-                            #{pos}
-                          </span>
-                          <span style={{ fontWeight: 700, color: '#f8fafc' }}>
-                            u/{stripEmoji(row.username)}
-                          </span>
-                          <span style={{ color: 'rgba(203, 213, 225, 0.78)' }}>
-                            · {formatMmSs(row.timeSec)}
-                          </span>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                            · {renderCrowns(row.crowns)}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: '10.5px',
-                              padding: '1px 6px',
-                              borderRadius: '999px',
-                              background: 'rgba(255, 255, 255, 0.08)',
-                              color: '#e2e8f0',
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0 }}>
+                          <CivCrest civ={b.civ} size={17} />
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 800, color: '#f8fafc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              #{idx + 1} {stripEmoji(b.empireName)}{' '}
+                              <span style={{ fontWeight: 600, color: 'rgba(203, 213, 225, 0.78)' }}>
+                                u/{stripEmoji(b.owner)}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '10.5px', color: 'rgba(203, 213, 225, 0.75)' }}>
+                              {b.trophies} Trophies · {b.defenseWins} Defense Wins
+                            </div>
+                          </div>
+                        </div>
+                        {onRaidPlayerBase && (
+                          <button
+                            type="button"
+                            className="pe-glass-action-btn"
+                            style={{ padding: '5px 10px', fontSize: '11px', flexShrink: 0 }}
+                            onClick={() => {
+                              onRaidPlayerBase(b);
+                              onClose();
                             }}
                           >
-                            {stripEmoji(row.strategy)}
-                          </span>
-                        </div>
-                        <span style={{ fontWeight: 800, color: '#fde68a', flexShrink: 0 }}>
-                          {row.score.toLocaleString()}
-                        </span>
+                            <EmpireIcon name="swords" size={11} />
+                            <span>Raid</span>
+                          </button>
+                        )}
                       </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* Past 4 Daily Chronicles Practice Archive */}
-              <div
-                style={{
-                  marginTop: '4px',
-                  paddingTop: '8px',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '5px',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      fontSize: '10.5px',
-                      fontWeight: 800,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.07em',
-                      color: '#fde68a',
-                    }}
-                  >
-                    <EmpireIcon name="scroll" size={12} />
-                    <span>Past Daily Chronicles · Practice</span>
-                  </span>
-                  <span style={{ fontSize: '10.5px', color: 'rgba(203, 213, 225, 0.6)' }}>
-                    Unranked
-                  </span>
+                    ))
+                  )}
                 </div>
-
-                {pastSieges.map((pastSpec, idx) => {
-                  const pCiv = CIVS[pastSpec.playerCiv];
-                  const eCiv = CIVS[pastSpec.enemyCiv];
-                  return (
-                    <div
-                      key={pastSpec.dateKey}
-                      className="pe-settings-tabular"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '8px',
-                        padding: '6px 9px',
-                        borderRadius: '10px',
-                        background: 'rgba(255, 255, 255, 0.04)',
-                        border: '1px solid rgba(255, 255, 255, 0.1)',
-                        fontSize: '11.5px',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0, flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 800, color: '#fde68a' }}>
-                          #{pastSpec.puzzleNumber}
-                        </span>
-                        <span style={{ fontWeight: 700, color: '#f8fafc' }}>
-                          {pastSpec.mapName}
-                        </span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: 'rgba(203, 213, 225, 0.78)' }}>
-                          · <CivCrest civ={pastSpec.playerCiv} size={12} />
-                          <span>{pCiv.name} vs</span>
-                          <CivCrest civ={pastSpec.enemyCiv} size={12} />
-                          <span>{eCiv.name}</span>
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        data-testid={`archive-play-${idx}`}
-                        className="pe-glass-action-btn"
-                        style={{ padding: '5px 10px', fontSize: '11px', flexShrink: 0 }}
-                        onClick={() => {
-                          onPlayCustomSpec({ ...pastSpec, isCustom: true });
-                          onClose();
-                        }}
-                      >
-                        <EmpireIcon name="swords" size={11} />
-                        <span>Practice</span>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+              )}
             </div>
           )}
 

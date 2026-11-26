@@ -47,10 +47,31 @@ export interface PlayerWarRoomStatsDto {
   rank: number | null;
 }
 
+/** Single commander row on the persistent Imperial Hall of Fame leaderboard. */
+export interface HallOfFameEntry {
+  username: string;
+  totalCrowns: number;
+  wins: number;
+  bestStreak: number;
+  bestScore: number;
+  favStrategy: string;
+}
+
 /** Response from `GET /api/empire/daily?date=YYYY-MM-DD`. */
 export interface DailyWarRoomResponse {
   dateKey: string;
   leaderboard: DailyLeaderboardEntry[];
+  hallOfFame?: HallOfFameEntry[];
+  community: CommunityWarStatsDto;
+  player: PlayerWarRoomStatsDto;
+}
+
+/** Unified 3-League Leaderboard Hub response (`GET /api/empire/leaderboard?date=YYYY-MM-DD`). */
+export interface LeaderboardHubResponse {
+  dateKey: string;
+  daily: DailyLeaderboardEntry[];
+  hallOfFame: HallOfFameEntry[];
+  raidCitadels: PlayerBaseBlueprint[];
   community: CommunityWarStatsDto;
   player: PlayerWarRoomStatsDto;
 }

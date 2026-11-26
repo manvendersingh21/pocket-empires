@@ -6,6 +6,7 @@ import {
   DEFAULT_SEEDED_BASES,
   EmpireValidationError,
   getDailyWarRoom,
+  getLeaderboardHub,
   isValidDateKey,
   listPlayerBases,
   recordMatchCompletion,
@@ -624,4 +625,86 @@ test('Clash-of-Clans player base storage merges seeded bases, validates footprin
   });
   assert.equal(raidLoss.defenderBase?.defenseWins, 1);
   assert.equal(raidLoss.defenderBase?.trophies, 1040);
+});
+
+test('Hall of Fame persists cumulative crowns across days, blocks same-day crown farming, and powers getLeaderboardHub', async () => {
+  const redis = createFakeRedis();
+  const { reddit } = createFakeReddit();
+
+  // Day 1: Arthur wins 2 crowns -> Hall of Fame: totalCrowns=2, wins=1, bestStreak=1
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'PocketEmpires',
+    username: 'arthur',
+    dateKey: '2026-11-20',
+    victory: true,
+    score: 1850,
+    timeSec: 155,
+    crowns: 2,
+    strategy: 'Heavy Cavalry Charge',
+    wololos: 0,
+  });
+
+  // Day 1 replay with 3 crowns -> increments totalCrowns by +1 only (2 -> 3), wins stays 1!
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'PocketEmpires',
+    username: 'arthur',
+    dateKey: '2026-11-20',
+    victory: true,
+    score: 2450,
+    timeSec: 112,
+    crowns: 3,
+    strategy: 'Heavy Cavalry Charge',
+    wololos: 1,
+  });
+
+  // Day 1 replay with lower 2 crowns -> no crown loss or gain, wins stays 1!
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'PocketEmpires',
+    username: 'arthur',
+    dateKey: '2026-11-20',
+    victory: true,
+    score: 1900,
+    timeSec: 148,
+    crowns: 2,
+    strategy: 'Wololo Cult',
+    wololos: 2,
+  });
+
+  // Day 2: Arthur wins 3 crowns -> totalCrowns=6, wins=2, bestStreak=2
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'PocketEmpires',
+    username: 'arthur',
+    dateKey: '2026-11-21',
+    victory: true,
+    score: 2600,
+    timeSec: 108,
+    crowns: 3,
+    strategy: 'Wololo Cult',
+    wololos: 3,
+  });
+
+  // Day 2: Lancelot wins 3 crowns -> totalCrowns=3, wins=1, bestStreak=1
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'PocketEmpires',
+    username: 'lancelot',
+    dateKey: '2026-11-21',
+    victory: true,
+    score: 2900,
+    timeSec: 99,
+    crowns: 3,
+    strategy: 'Heavy Cavalry Charge',
+    wololos: 0,
+  });
+
+  const hub = await getLeaderboardHub(redis, '2026-11-21', 'arthur');
+  assert.equal(hub.daily[0].username, 'lancelot');
+  assert.equal(hub.daily[1].username, 'arthur');
+  assert.equal(hub.hallOfFame.length, 2);
+  assert.equal(hub.hallOfFame[0].username, 'arthur');
+  assert.equal(hub.hallOfFame[0].totalCrowns, 6);
+  assert.equal(hub.hallOfFame[0].wins, 2);
+  assert.equal(hub.hallOfFame[0].bestStreak, 2);
+  assert.equal(hub.hallOfFame[1].username, 'lancelot');
+  assert.equal(hub.hallOfFame[1].totalCrowns, 3);
+  assert.equal(hub.raidCitadels.length, DEFAULT_SEEDED_BASES.length);
 });

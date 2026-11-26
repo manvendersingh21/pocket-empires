@@ -61,7 +61,12 @@ export type EmpireIconName =
   | 'publish'
   | 'trebuchet'
   | 'castle_age'
-  | 'demolish';
+  | 'demolish'
+  | 'relic'
+  | 'rally'
+  | 'bell'
+  | 'bounty'
+  | 'star';
 
 export interface EmpireIconProps {
   name: EmpireIconName;
@@ -1878,6 +1883,132 @@ function renderIconArtwork(name: EmpireIconName): React.ReactNode {
             fill="#fda4af"
           />
         </>
+      );
+
+    case 'relic':
+      // Sacred Golden Relic Ark / Chalice with Halo
+      return (
+        <>
+          <circle cx="12" cy="10" r="8.2" fill="#fde047" fillOpacity="0.16" />
+          <path
+            d="M12 2.4L13.1 5.2L15.8 6.2L13.1 7.2L12 10L10.9 7.2L8.2 6.2L10.9 5.2Z"
+            fill="#fef08a"
+          />
+          <path
+            d="M6.2 12.2H17.8L16.4 18.8H7.6Z"
+            fill="#f5b942"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M8.2 9.8H15.8L17.4 12.2H6.6Z"
+            fill="#fde047"
+            stroke={INK}
+            strokeWidth="1.25"
+            strokeLinejoin="round"
+          />
+          <rect
+            x="5.4"
+            y="18.6"
+            width="13.2"
+            height="2.8"
+            rx="0.9"
+            fill="#d97706"
+            stroke={INK}
+            strokeWidth="1.2"
+          />
+          <circle cx="12" cy="15.4" r="1.5" fill="#dc2626" stroke={INK} strokeWidth="0.8" />
+        </>
+      );
+
+    case 'rally':
+      // Brass & Sapphire Rally Pennon Banner
+      return (
+        <>
+          <ellipse cx="11" cy="20.4" rx="5.5" ry="1.8" fill="none" stroke="#93c5fd" strokeWidth="1.4" />
+          <line
+            x1="7.2"
+            y1="20.2"
+            x2="7.2"
+            y2="3.2"
+            stroke="#f5b942"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+          />
+          <circle cx="7.2" cy="3" r="1.5" fill="#fde047" stroke={INK} strokeWidth="0.9" />
+          <path
+            d="M8 4.4L20.2 7.8L16.8 10.6L20.2 13.4L8 14.8Z"
+            fill="#2563eb"
+            stroke="#fde047"
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+          />
+        </>
+      );
+
+    case 'bell':
+      // Medieval Bronze Town Bell
+      return (
+        <>
+          <path
+            d="M12 2.8C8.4 2.8 6.4 5.6 6.2 9.8L4.4 16.6H19.6L17.8 9.8C17.6 5.6 15.6 2.8 12 2.8Z"
+            fill="#f5b942"
+            stroke={INK}
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M12 3.8C9.4 3.8 7.6 6.1 7.3 9.9L5.9 15.6H12Z"
+            fill="#fef08a"
+            opacity="0.58"
+          />
+          <rect
+            x="3.6"
+            y="16.2"
+            width="16.8"
+            height="2.4"
+            rx="1"
+            fill="#d97706"
+            stroke={INK}
+            strokeWidth="1.2"
+          />
+          <circle cx="12" cy="19.8" r="1.9" fill="#92400e" stroke={INK} strokeWidth="1.15" />
+          <path
+            d="M10.4 2.8C10.4 1.9 11.1 1.4 12 1.4C12.9 1.4 13.6 1.9 13.6 2.8"
+            fill="none"
+            stroke={INK}
+            strokeWidth="1.4"
+          />
+        </>
+      );
+
+    case 'bounty':
+      // Royal Sealed Bounty Wax Medal
+      return (
+        <>
+          <circle cx="12" cy="12" r="9.2" fill="#991b1b" stroke="#f5b942" strokeWidth="1.5" />
+          <circle cx="12" cy="12" r="6.8" fill="#dc2626" stroke="#fde047" strokeWidth="0.9" />
+          <polygon
+            points="12,6.4 13.5,9.9 17.3,10.2 14.4,12.7 15.3,16.4 12,14.4 8.7,16.4 9.6,12.7 6.7,10.2 10.5,9.9"
+            fill="#fde047"
+            stroke={INK}
+            strokeWidth="0.8"
+            strokeLinejoin="round"
+          />
+        </>
+      );
+
+    case 'star':
+      // Burnished Five-Point Gold Star
+      return (
+        <polygon
+          points="12,2.4 14.9,8.4 21.5,9.3 16.7,13.9 17.9,20.5 12,17.4 6.1,20.5 7.3,13.9 2.5,9.3 9.1,8.4"
+          fill="#f5b942"
+          stroke={INK}
+          strokeWidth="1.35"
+          strokeLinejoin="round"
+        />
       );
   }
 }

@@ -16,9 +16,40 @@
  */
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { registerHooks } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '../node_modules/playwright-core/index.mjs';
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (
+      (specifier.startsWith('./') || specifier.startsWith('../')) &&
+      specifier.endsWith('.js') &&
+      context.parentURL?.startsWith('file://')
+    ) {
+      const parentDir = path.dirname(fileURLToPath(context.parentURL));
+      const tsCandidate = path.resolve(parentDir, specifier.slice(0, -3) + '.ts');
+      if (existsSync(tsCandidate)) {
+        return nextResolve(new URL(`file://${tsCandidate}`).href, context);
+      }
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+const {
+  getDailyWarRoom,
+  getLeaderboardHub,
+  getPlayerBase,
+  listPlayerBases,
+  recordMatchCompletion,
+  recordRaidResult,
+  savePlayerBase,
+  submitWarChronicleComment,
+  todayUtcDateKey,
+} = await import('../src/server/empire.ts');
+const { handleClientMessage } = await import('../src/server/ping.ts');
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
@@ -31,9 +62,14 @@ const REQUIRED_FEATURES = [
   'war_room_play_daily',
   'home_my_base_btn',
   'home_raid_players_btn',
+  'home_leaderboard_btn',
   'home_settings_btn',
+  'war_room_difficulty_bar',
+  'war_room_bounties',
+  'war_room_week_strip',
   'settings_close_btn',
   'war_room_ranks_tab',
+  'leaderboard_league_tabs',
   'skirmish_forge_tab',
   'forge_prompt_input',
   'forge_craft_btn',
@@ -49,6 +85,8 @@ const REQUIRED_FEATURES = [
   'hud_taunt_btn',
   'hud_speed_toggle',
   'hud_onboarding_steps',
+  'hud_keep_btn',
+  'hud_selection_inspector',
   'squad_idle_villager',
   'squad_all_army',
   'squad_siege_keep',
@@ -56,6 +94,8 @@ const REQUIRED_FEATURES = [
   'dock_mode_build',
   'minimap_canvas',
   'chronicle_modal',
+  'chronicle_rival_banner',
+  'chronicle_momentum_chart',
 ];
 
 const MIME_TYPES = {
@@ -138,7 +178,7 @@ function loadAndValidateFeatureMap() {
  * Starts a clean static HTTP server serving `dist/client` on `127.0.0.1:0`.
  * @returns {Promise<{ baseUrl: string, close: () => Promise<void> }>}
  */
-function startStaticClientServer() {
+async function startStaticClientServer() {
   for (const htmlFile of ['splash.html', 'game.html']) {
     const target = path.join(DIST_CLIENT_DIR, htmlFile);
     assertCondition(
@@ -147,12 +187,185 @@ function startStaticClientServer() {
     );
   }
 
+  const store = new Map();
+  const redis = {
+    async get(key) {
+      return store.get(key) ?? null;
+    },
+    async set(key, value) {
+      store.set(key, value);
+    },
+  };
+  const reddit = {
+    async setUserFlair() {
+      return;
+    },
+    async submitComment() {
+      return { id: 't1_verify_comment' };
+    },
+  };
+  const today = todayUtcDateKey();
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'GameOnReddit',
+    username: 'TheViper_AoE',
+    dateKey: today,
+    victory: true,
+    score: 3640,
+    timeSec: 114,
+    crowns: 3,
+    strategy: 'Heavy Cavalry Charge',
+    wololos: 1,
+  });
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'GameOnReddit',
+    username: 'LordDaut',
+    dateKey: today,
+    victory: true,
+    score: 3320,
+    timeSec: 132,
+    crowns: 3,
+    strategy: 'Wololo Cult',
+    wololos: 3,
+  });
+  await recordMatchCompletion(redis, reddit, {
+    subredditName: 'GameOnReddit',
+    username: 'SpiritOfTheLaw',
+    dateKey: today,
+    victory: true,
+    score: 2980,
+    timeSec: 158,
+    crowns: 2,
+    strategy: 'Yeoman Longbow Volley',
+    wololos: 0,
+  });
+
+  const sendJson = (res, status, payload) => {
+    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(payload));
+  };
+
+  const readJsonBody = (req) =>
+    new Promise((resolve) => {
+      let raw = '';
+      req.on('data', (chunk) => {
+        raw += chunk.toString();
+      });
+      req.on('end', () => {
+        try {
+          resolve(JSON.parse(raw || '{}'));
+        } catch {
+          resolve({});
+        }
+      });
+    });
+
   return new Promise((resolve, reject) => {
-    const server = createServer((req, res) => {
+    const server = createServer(async (req, res) => {
       const reqUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (reqUrl.pathname === '/favicon.ico') {
         res.writeHead(204);
         res.end();
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/ping') {
+        const body = await readJsonBody(req);
+        const reply = handleClientMessage(body);
+        sendJson(res, reply ? 200 : 400, reply ?? { error: 'invalid ping' });
+        return;
+      }
+
+      if (req.method === 'GET' && reqUrl.pathname === '/api/empire/daily') {
+        const dateKey = reqUrl.searchParams.get('date') || today;
+        const data = await getDailyWarRoom(redis, dateKey, 'Commander');
+        sendJson(res, 200, data);
+        return;
+      }
+
+      if (req.method === 'GET' && reqUrl.pathname === '/api/empire/leaderboard') {
+        const dateKey = reqUrl.searchParams.get('date') || today;
+        const data = await getLeaderboardHub(redis, dateKey, 'Commander');
+        sendJson(res, 200, data);
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/empire/complete') {
+        const body = await readJsonBody(req);
+        const result = await recordMatchCompletion(redis, reddit, {
+          subredditName: 'GameOnReddit',
+          username: 'Commander',
+          dateKey: typeof body.dateKey === 'string' ? body.dateKey : today,
+          victory: Boolean(body.victory),
+          score: Number(body.score ?? 0),
+          timeSec: Number(body.timeSec ?? 1),
+          crowns: Number(body.crowns ?? 0),
+          strategy: typeof body.strategy === 'string' ? body.strategy : 'Combined Arms Siege',
+          wololos: Number(body.wololos ?? 0),
+        });
+        sendJson(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/empire/comment') {
+        const body = await readJsonBody(req);
+        const result = await submitWarChronicleComment(redis, reddit, {
+          postId: 't3_verify_daily_siege',
+          username: 'Commander',
+          dateKey: typeof body.dateKey === 'string' ? body.dateKey : today,
+          text: typeof body.text === 'string' ? body.text : '',
+        });
+        sendJson(res, 200, result);
+        return;
+      }
+
+      if (req.method === 'GET' && reqUrl.pathname === '/api/empire/bases') {
+        const excludeOwner = reqUrl.searchParams.get('excludeOwner')?.trim() || undefined;
+        const [bases, myBase] = await Promise.all([
+          listPlayerBases(redis, excludeOwner),
+          getPlayerBase(redis, 'Commander'),
+        ]);
+        sendJson(res, 200, { bases, myBase });
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/empire/bases') {
+        const raw = await readJsonBody(req);
+        const p =
+          raw && raw.base && typeof raw.base === 'object' && !Array.isArray(raw.base)
+            ? raw.base
+            : raw;
+        const base = await savePlayerBase(redis, {
+          owner: 'Commander',
+          empireName: typeof p.empireName === 'string' ? p.empireName : undefined,
+          civ: p.civ,
+          biome: p.biome,
+          buildings: Array.isArray(p.buildings) ? p.buildings : [],
+          garrison: Array.isArray(p.garrison) ? p.garrison : [],
+        });
+        const bases = await listPlayerBases(redis);
+        sendJson(res, base ? 200 : 400, { saved: Boolean(base), base, bases });
+        return;
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/empire/raid') {
+        const p = await readJsonBody(req);
+        const defender = typeof p.defender === 'string' ? p.defender : 'TheViper_AoE';
+        const result = await recordRaidResult(redis, {
+          attacker: 'Commander',
+          defender,
+          victory: Boolean(p.victory),
+        });
+        const [bases, myBase] = await Promise.all([
+          listPlayerBases(redis),
+          getPlayerBase(redis, 'Commander'),
+        ]);
+        sendJson(res, 200, {
+          recorded: true,
+          trophiesDelta: result.trophiesDelta,
+          defenderBase: result.defenderBase,
+          bases,
+          myBase,
+        });
         return;
       }
 
@@ -245,6 +458,7 @@ async function verifySplashViewport(browser, baseUrl, featureMap, viewport, labe
     await page.goto(`${baseUrl}/splash.html`, { waitUntil: 'domcontentloaded' });
     const playCta = page.locator(featureMap.splash_play_cta.selectorRoleOrText);
     await playCta.waitFor({ state: 'visible', timeout: 8000 });
+    await page.locator('.pe-pulse-live').waitFor({ state: 'visible', timeout: 5000 });
     await waitAnimationFrames(page, 2);
 
     if (screenshotsDir) {
@@ -267,10 +481,12 @@ async function verifySplashViewport(browser, baseUrl, featureMap, viewport, labe
         splashClientHeight: splash ? splash.clientHeight : -1,
         hasDioramaSvg: Boolean(diorama),
         hasTitle: bodyText.includes('POCKET EMPIRES'),
+        hasLeaderPulse: bodyText.includes('TheViper_AoE'),
       };
     });
 
     assertCondition(metrics.hasTitle, `${label}: Splash title "POCKET EMPIRES" missing.`);
+    assertCondition(metrics.hasLeaderPulse, `${label}: Splash live #1 leader pulse missing.`);
     assertCondition(metrics.hasDioramaSvg, `${label}: Isometric diorama SVG missing.`);
     assertCondition(
       metrics.docScrollHeight <= metrics.docClientHeight + 1,
@@ -341,20 +557,35 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
   try {
     await page.goto(`${baseUrl}/game.html`, { waitUntil: 'domcontentloaded' });
 
-    // 1. Translucent 3-Button Home Overlay over Live Isometric Village
+    // 1. Translucent Home War Room + Habit Card + 3-League Leaderboard Button over Live Isometric Village
     await loc('war_room_play_daily').waitFor({ state: 'visible', timeout: 8000 });
     await loc('home_my_base_btn').waitFor({ state: 'visible', timeout: 5000 });
     await loc('home_raid_players_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('home_leaderboard_btn').waitFor({ state: 'visible', timeout: 5000 });
     await loc('home_settings_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('war_room_difficulty_bar').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('war_room_bounties').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('war_room_week_strip').waitFor({ state: 'visible', timeout: 5000 });
 
-    // Assert the live isometric village canvas is already rendered behind the translucent Home overlay
-    const homeCanvasRendered = await page.evaluate(() => {
+    const warRoomMetrics = await page.evaluate(() => {
+      const doc = document.documentElement;
       const c = document.querySelector('main canvas');
-      return Boolean(c && c.width > 0 && c.height > 0);
+      return {
+        hasCanvas: Boolean(c && c.width > 0 && c.height > 0),
+        docScrollHeight: doc.scrollHeight,
+        docClientHeight: doc.clientHeight,
+        docScrollWidth: doc.scrollWidth,
+        docClientWidth: doc.clientWidth,
+      };
     });
     assertCondition(
-      homeCanvasRendered,
+      warRoomMetrics.hasCanvas,
       `${label}: Expected live isometric village canvas rendered behind translucent Home overlay.`,
+    );
+    assertCondition(
+      warRoomMetrics.docScrollHeight <= warRoomMetrics.docClientHeight + 1 &&
+        warRoomMetrics.docScrollWidth <= warRoomMetrics.docClientWidth + 1,
+      `${label}: War Room overflowed viewport (${JSON.stringify(warRoomMetrics)}).`,
     );
 
     await waitAnimationFrames(page, 4);
@@ -363,6 +594,20 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
         path: path.join(screenshotsDir, `${shotPrefix}-war-room.png`),
       });
     }
+
+    // 1b. Open 3-League Leaderboard Hub directly from War Room & cycle Today's Siege -> Hall of Fame -> Raid Citadels
+    await loc('home_leaderboard_btn').click();
+    await loc('leaderboard_league_tabs').waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('[data-testid="league-tab-hall"]').click();
+    await page.locator('[data-testid="league-tab-raids"]').click();
+    await page.locator('[data-testid="league-tab-daily"]').click();
+    if (screenshotsDir && !isMobile) {
+      await waitAnimationFrames(page, 2);
+      await page.screenshot({
+        path: path.join(screenshotsDir, 'desktop-leaderboard.png'),
+      });
+    }
+    await loc('settings_close_btn').click();
 
     // 2. Raid Players Sheet & Live Raid Destruction Pill
     await loc('home_raid_players_btn').click();
@@ -495,11 +740,24 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       `${label}: Expected initial hud_speed_toggle label "1×", got "${speedBefore}".`,
     );
     await loc('hud_speed_toggle').click();
-    const speedAfter = (await loc('hud_speed_toggle').innerText()).trim();
+    const speedMid = (await loc('hud_speed_toggle').innerText()).trim();
     assertCondition(
-      speedAfter.includes('1.5×'),
-      `${label}: Expected hud_speed_toggle label "1.5×" after click, got "${speedAfter}".`,
+      speedMid.includes('1.5×'),
+      `${label}: Expected hud_speed_toggle label "1.5×" after first click, got "${speedMid}".`,
     );
+    await loc('hud_speed_toggle').click();
+    const speedFast = (await loc('hud_speed_toggle').innerText()).trim();
+    assertCondition(
+      speedFast.includes('2×'),
+      `${label}: Expected hud_speed_toggle label "2×" after second click, got "${speedFast}".`,
+    );
+    await loc('hud_speed_toggle').click();
+    const speedWrap = (await loc('hud_speed_toggle').innerText()).trim();
+    assertCondition(
+      speedWrap.includes('1×') && !speedWrap.includes('1.5×'),
+      `${label}: Expected hud_speed_toggle label "1×" after wrap, got "${speedWrap}".`,
+    );
+    await loc('hud_speed_toggle').click();
 
     await waitAnimationFrames(page, 3);
 
@@ -569,7 +827,19 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
       `${label}: HUD element overlaps Minimap in 2D.`,
     );
 
-    // Exercise squad pills
+    // Exercise Keep button + Contextual Selection Inspector (Rally & Town Bell) + Squad pills
+    await loc('hud_keep_btn').waitFor({ state: 'visible', timeout: 5000 });
+    await loc('hud_keep_btn').click();
+    await loc('hud_selection_inspector').waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('[data-testid="hud-rally-btn"]').waitFor({ state: 'visible', timeout: 5000 });
+    const bellBtn = page.locator('[data-testid="hud-town-bell-btn"]');
+    await bellBtn.waitFor({ state: 'visible', timeout: 5000 });
+    await bellBtn.click();
+    assertCondition(
+      (await bellBtn.innerText()).includes('All Clear'),
+      `${label}: Expected Town Bell button to toggle to "All Clear".`,
+    );
+    await bellBtn.click();
     await loc('squad_idle_villager').click();
     await loc('squad_all_army').click();
     await loc('squad_siege_keep').click();
@@ -671,7 +941,10 @@ async function verifyGameFlow(browser, baseUrl, featureMap, opts) {
         !/\p{Extended_Pictographic}/u.test(modalText),
         `${label}: ChronicleModal leaked raw emoji glyph.`,
       );
+      await loc('chronicle_rival_banner').waitFor({ state: 'visible', timeout: 5000 });
+      await loc('chronicle_momentum_chart').waitFor({ state: 'visible', timeout: 5000 });
 
+      await page.waitForTimeout(550);
       await waitAnimationFrames(page, 2);
       if (screenshotsDir) {
         await page.screenshot({

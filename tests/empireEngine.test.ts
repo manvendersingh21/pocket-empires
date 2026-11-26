@@ -38,9 +38,12 @@ const { buildBlockedGrid, findPath, isTileWalkable } = await import('../src/engi
 const {
   canPlaceBuilding,
   cmdAdvanceAge,
+  cmdCancelQueueItem,
   cmdDemolishBuilding,
   cmdIssueOrder,
   cmdPlaceBuilding,
+  cmdRingTownBell,
+  cmdSetRallyPoint,
   cmdTrainUnit,
   cmdTriggerTaunt,
   computeRaidDestruction,
@@ -52,10 +55,26 @@ const {
   exportBaseBlueprint,
   formatChronicleComment,
   getEffectiveBuildingCost,
+  getEffectiveUnitCost,
   getEffectiveUnitStats,
   getTeamPop,
   stepGame,
 } = await import('../src/engine/sim.ts');
+const { generateDailyBounties, evaluateDailyBounties } = await import(
+  '../src/engine/dailyBounties.ts'
+);
+const {
+  IMPERIAL_RANKS,
+  buildRecentWeekLedger,
+  createEmptyCareerProfile,
+  getCareerRankInfo,
+  recordCareerMatch,
+} = await import('../src/engine/career.ts');
+const {
+  buildLiveDailyStandings,
+  computeRivalChallenge,
+  formatUtcResetCountdown,
+} = await import('../src/engine/leaderboardModel.ts');
 
 function makeNeutralSpec(overrides: Partial<SkirmishSpec> = {}): SkirmishSpec {
   return {
@@ -895,5 +914,227 @@ describe('AoE Pond Fish, Wild Horses, Farms, Walls & Clash Base Raids', () => {
     raid.outcome = 'victory';
     raid.timeSec = 95;
     assert.deepEqual(computeRaidDestruction(raid), { destructionPct: 100, raidStars: 3 });
+  });
+});
+
+describe('Sacred Relics, Rally Points, Queue Refund, Town Bell, Bounties & Career', () => {
+  test('Sacred Relics spawn symmetrically, pick up, drop on death, enshrine, and credit both gold and goldGathered', () => {
+    const state = createInitialState(makeNeutralSpec());
+    state.enemyWaveTimer = 999;
+
+    assert.equal(state.relics?.length, 2, 'Expected 2 symmetric Sacred Relics');
+    const [r0, r1] = state.relics!;
+    assert.equal(r0.owner, 'neutral');
+    assert.ok(Math.abs(r0.x + r1.x - MAP_SIZE) < 1e-6);
+    assert.ok(Math.abs(r0.y + r1.y - MAP_SIZE) < 1e-6);
+
+    // Park villagers idle so goldGathered strictly reflects Relic passive income
+    for (const u of state.units) {
+      if (u.kind === 'villager') u.order = { type: 'idle' };
+    }
+
+    const scout = state.units.find((u) => u.team === 'player' && u.kind === 'scout')!;
+    scout.x = r0.x + 0.2;
+    scout.y = r0.y + 0.2;
+    scout.order = { type: 'idle' };
+    stepGame(state, 0.05);
+    assert.equal(r0.carrierUnitId, scout.id, 'Expected scout to claim neutral Sacred Relic');
+
+    // Dropping carrier on death restores neutral uncarried Relic
+    state.units = state.units.filter((u) => u.id !== scout.id);
+    stepGame(state, 0.05);
+    assert.equal(r0.carrierUnitId, null);
+    assert.equal(r0.owner, 'neutral');
+
+    // Train a Knight, pick up Relic, bring near Player Town Center -> enshrines & ticks +Gold
+    const knight = trainUnitViaBuilding(state, 'player', 'knight', 11, 10);
+    knight.x = r0.x + 0.1;
+    knight.y = r0.y + 0.1;
+    knight.order = { type: 'idle' };
+    stepGame(state, 0.05);
+    assert.equal(r0.carrierUnitId, knight.id);
+
+    const tc = state.buildings.find((b) => b.team === 'player' && b.kind === 'town_center')!;
+    knight.x = tc.tileX + 0.5;
+    knight.y = tc.tileY - 0.6;
+    stepGame(state, 0.05);
+    assert.equal(r0.owner, 'player');
+    assert.equal(r0.carrierUnitId, null);
+    assert.equal(state.stats.relicsCaptured, 1);
+
+    const goldBeforeTick = state.resources.player.gold;
+    const gatheredBeforeTick = state.stats.goldGathered;
+    for (let i = 0; i < 35; i++) {
+      state.enemyWaveTimer = 999;
+      stepGame(state, 0.05);
+    }
+    const goldGain = state.resources.player.gold - goldBeforeTick;
+    const gatheredGain = state.stats.goldGathered - gatheredBeforeTick;
+    assert.ok(goldGain >= 3, `Expected enshrined Relic to yield >= 3 Gold, got ${goldGain}`);
+    assert.equal(goldGain, gatheredGain, 'Relic passive gold must increment both treasury and goldGathered');
+  });
+
+  test('cmdSetRallyPoint auto-dispatches units, cmdCancelQueueItem refunds 100%, and cmdRingTownBell shelters/retasks villagers', () => {
+    const state = createInitialState(makeNeutralSpec());
+    state.enemyWaveTimer = 999;
+
+    const barracks = cmdPlaceBuilding(state, 'player', 'barracks', 11, 10)!;
+    assert.ok(barracks);
+    barracks.built = true;
+    barracks.hp = barracks.maxHp;
+
+    // 100% queue refund check
+    state.resources.player = { wood: 300, food: 300, gold: 300 };
+    const militiaCost = getEffectiveUnitCost(state.spec, 'player', 'militia');
+    assert.equal(cmdTrainUnit(state, 'player', 'militia', barracks.id), true);
+    assert.equal(barracks.queue.length, 1);
+    assert.equal(cmdCancelQueueItem(state, 'player', barracks.id, 0), true);
+    assert.equal(barracks.queue.length, 0);
+    assert.equal(state.resources.player.food, 300);
+    assert.equal(state.resources.player.wood, 300);
+    assert.equal(state.resources.player.gold, 300);
+    assert.equal(militiaCost.food > 0, true);
+
+    // Custom rally point auto-dispatches spawned military unit
+    assert.equal(cmdSetRallyPoint(state, 'player', barracks.id, 8, 8), true);
+    assert.equal(barracks.rallyX, 8.5);
+    assert.equal(barracks.rallyY, 8.5);
+    assert.equal(cmdTrainUnit(state, 'player', 'militia', barracks.id), true);
+    const beforeIds = new Set(state.units.map((u) => u.id));
+    for (let i = 0; i < 160; i++) {
+      state.enemyWaveTimer = 999;
+      stepGame(state, 0.05);
+      const spawned = state.units.find((u) => !beforeIds.has(u.id) && u.kind === 'militia');
+      if (spawned) {
+        assert.equal(spawned.order.type, 'move');
+        if (spawned.order.type === 'move') {
+          assert.equal(spawned.order.tx, 8.5);
+          assert.equal(spawned.order.ty, 8.5);
+          assert.equal(spawned.order.attackMove, true);
+        }
+        break;
+      }
+    }
+
+    // Town Bell shelters villagers and All Clear re-tasks them
+    assert.equal(cmdRingTownBell(state, 'player'), true);
+    assert.ok((state.townBellSec ?? 0) > 0);
+    assert.equal(state.stats.townBellsRung, 1);
+    assert.equal(cmdRingTownBell(state, 'player'), true);
+    assert.equal(state.townBellSec, 0);
+  });
+
+  test('difficulty score multipliers, Daily Bounties, Career XP ranks, and Rival Challenge math work deterministically', () => {
+    const stdState = createInitialState(makeNeutralSpec({ difficulty: 'standard' }));
+    stdState.outcome = 'victory';
+    stdState.timeSec = 120;
+    const stdSummary = computeScoreSummary(stdState);
+
+    const vetState = createInitialState(makeNeutralSpec({ difficulty: 'veteran' }));
+    vetState.outcome = 'victory';
+    vetState.timeSec = 120;
+    const vetSummary = computeScoreSummary(vetState);
+
+    const impState = createInitialState(makeNeutralSpec({ difficulty: 'imperial' }));
+    impState.outcome = 'victory';
+    impState.timeSec = 120;
+    const impSummary = computeScoreSummary(impState);
+
+    assert.equal(vetSummary.score, Math.round(stdSummary.score * 1.2));
+    assert.equal(impSummary.score, Math.round(stdSummary.score * 1.35));
+
+    // Daily Bounties
+    const spec = generateDailySpec('2026-11-24');
+    const bountiesA = generateDailyBounties(spec);
+    const bountiesB = generateDailyBounties(spec);
+    assert.deepEqual(bountiesA, bountiesB);
+    assert.equal(bountiesA.length, 3);
+
+    const evalState = createInitialState(spec);
+    evalState.stats.goldGathered = 300;
+    evalState.stats.foodGathered = 300;
+    evalState.stats.buildingsBuilt = 5;
+    evalState.stats.sheepHerded = 2;
+    evalState.stats.horsesTamed = 1;
+    evalState.stats.wololoConversions = 2;
+    evalState.stats.relicsCaptured = 2;
+    evalState.ages = { player: 2, enemy: 1 };
+    evalState.stats.enemyBuildingsRazed = 3;
+    evalState.stats.enemyUnitsSlain = 12;
+    evalState.stats.unitsLost = 1;
+    evalState.timeSec = spec.parSec - 10;
+    evalState.outcome = 'victory';
+
+    const evaluated = evaluateDailyBounties(evalState, bountiesA);
+    assert.equal(evaluated.every((b) => b.completed), true);
+
+    // Career progression & 7-day ledger
+    let profile = createEmptyCareerProfile();
+    assert.equal(getCareerRankInfo(0).title, IMPERIAL_RANKS[0].title);
+    const recorded = recordCareerMatch(
+      profile,
+      evalState,
+      evaluated.map((b) => b.id),
+      impSummary.score + 600,
+    );
+    profile = recorded.nextProfile;
+    assert.ok(recorded.xpGained >= 300);
+    assert.equal(profile.totalWins, 1);
+    assert.equal(profile.totalCrowns, 3);
+    assert.equal(buildRecentWeekLedger('2026-11-24', profile).length, 7);
+
+    // Leaderboard standings & Rival Challenge
+    const standings = buildLiveDailyStandings(spec, [], {
+      username: 'You',
+      score: 2400,
+      timeSec: 120,
+      crowns: 3,
+      strategy: 'Heavy Cavalry Charge',
+      wololos: 1,
+    });
+    assert.equal(standings[0].username, 'Gold Sovereign');
+    assert.equal(standings[1].username, 'You');
+    const rival = computeRivalChallenge(standings, 2400, 120, spec.parSec);
+    assert.equal(rival.playerRank, 2);
+    assert.match(rival.headline, /480 pts behind #1 Gold Sovereign/);
+    assert.match(formatUtcResetCountdown(Date.UTC(2026, 10, 24, 12, 0, 0)), /Next Siege in 12h 00m/);
+
+    // When serverRows already include player at rank 1, passing playerServerRank=1 merges without duplicating
+    const serverMerged = buildLiveDailyStandings(
+      spec,
+      [
+        {
+          username: 'Commander',
+          score: 4219,
+          timeSec: 112,
+          crowns: 3,
+          strategy: 'Wololo Cult',
+          wololos: 2,
+        },
+        {
+          username: 'TheViper_AoE',
+          score: 3640,
+          timeSec: 114,
+          crowns: 3,
+          strategy: 'Heavy Cavalry Charge',
+          wololos: 1,
+        },
+      ],
+      {
+        username: 'You',
+        score: 4219,
+        timeSec: 112,
+        crowns: 3,
+        strategy: 'Wololo Cult',
+        wololos: 2,
+      },
+      1,
+    );
+    assert.equal(serverMerged[0].username, 'Commander');
+    assert.equal(serverMerged[0].isPlayer, true);
+    assert.equal(serverMerged.filter((r) => r.isPlayer).length, 1);
+    const serverRival = computeRivalChallenge(serverMerged, 4219, 112, spec.parSec);
+    assert.equal(serverRival.playerRank, 1);
+    assert.match(serverRival.headline, /Reigning #1 Sovereign Today/);
   });
 });

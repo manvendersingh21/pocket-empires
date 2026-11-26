@@ -30,6 +30,7 @@ registerHooks({
 
 const {
   getDailyWarRoom,
+  getLeaderboardHub,
   getPlayerBase,
   listPlayerBases,
   recordMatchCompletion,
@@ -138,6 +139,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/empire/daily') {
     const dateKey = url.searchParams.get('date') || today;
     const data = await getDailyWarRoom(redis, dateKey, 'You');
+    sendJson(res, 200, data);
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/empire/leaderboard') {
+    const dateKey = url.searchParams.get('date') || today;
+    const data = await getLeaderboardHub(redis, dateKey, 'You');
     sendJson(res, 200, data);
     return;
   }

@@ -22,6 +22,23 @@ import {
   type EmpireIconName,
 } from './EmpireIcons.js';
 
+export interface SelectedBuildingInspector {
+  id: number;
+  kind: BuildingKind;
+  hp: number;
+  maxHp: number;
+  built: boolean;
+  queue: UnitKind[];
+  trainProgressPct: number;
+}
+
+export interface SelectedUnitGroupInspector {
+  kind: UnitKind;
+  count: number;
+  totalHp: number;
+  maxHp: number;
+}
+
 export interface HudSnapshot {
   resources: Resources;
   popCurrent: number;
@@ -37,6 +54,13 @@ export interface HudSnapshot {
   playerAge?: 1 | 2;
   raidDestructionPct?: number;
   tamedHorses?: number;
+  relicsPlayer?: number;
+  relicsTotal?: number;
+  townBellActive?: boolean;
+  townBellSec?: number;
+  ghostBreach?: { username: string; timeSec: number; tileX: number; tileY: number } | null;
+  selectedBuilding?: SelectedBuildingInspector | null;
+  selectedUnitGroups?: ReadonlyArray<SelectedUnitGroupInspector>;
 }
 
 export interface EmpireHudProps {
@@ -57,7 +81,7 @@ export interface EmpireHudProps {
   onSelectPlacement: (kind: BuildingKind | null) => void;
   onTaunt: (id: TauntId) => void;
   onExitToWarRoom: () => void;
-  gameSpeed?: 1 | 1.5;
+  gameSpeed?: 1 | 1.5 | 2;
   onToggleSpeed?: () => void;
   onOpenSettings?: () => void;
   onPublishBase?: () => void;
@@ -69,6 +93,13 @@ export interface EmpireHudProps {
   onToggleDemolish?: () => void;
   empireName?: string;
   onChangeEmpireName?: (name: string) => void;
+  rallyMode?: boolean;
+  onToggleRally?: () => void;
+  onCancelQueueItem?: (buildingId: number, queueIndex: number) => void;
+  onRingTownBell?: () => void;
+  onFocusKeep?: () => void;
+  onFocusGhostBreach?: () => void;
+  onFilterSelectedKind?: (kind: UnitKind) => void;
 }
 
 type TrainCardVisual =
@@ -968,6 +999,59 @@ const HUD_CSS = `
   opacity: 0.52;
   background: rgba(15, 20, 28, 0.32);
 }
+.pe-inspector-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 11px;
+  background: rgba(9, 13, 20, 0.62);
+  border: 1px solid rgba(253, 224, 71, 0.32);
+  font-size: 10.5px;
+  flex-wrap: wrap;
+}
+.pe-inspector-chip {
+  cursor: pointer;
+  padding: 2px 6.5px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pe-inspector-chip:hover {
+  border-color: rgba(253, 224, 71, 0.58);
+  background: rgba(255, 255, 255, 0.16);
+}
+.pe-inspector-chip-active {
+  background: rgba(245, 166, 35, 0.28);
+  border-color: rgba(253, 224, 71, 0.72);
+  color: #fef3c7;
+}
+.pe-bell-badge {
+  pointer-events: auto;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(185, 28, 28, 0.58);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(254, 202, 202, 0.68);
+  color: #fef2f2;
+  font-size: 10px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 3.5px;
+  white-space: nowrap;
+}
 @media (max-width: 460px) {
   .pe-cards-row {
     gap: 3px;
@@ -1032,6 +1116,17 @@ function CostInline({
   );
 }
 
+const UNIT_ROLE_HINTS: Record<UnitKind, string> = {
+  villager: 'Gather & Build',
+  scout: 'Fast Recon',
+  militia: '2× vs Buildings',
+  pikeman: '3× vs Cavalry',
+  archer: 'Ranged Volley',
+  knight: 'Crushes Archers',
+  monk: 'Wololo Faith + Heal',
+  trebuchet: '90 Siege Range',
+};
+
 export function EmpireHud({
   spec,
   mode = 'skirmish',
@@ -1062,6 +1157,13 @@ export function EmpireHud({
   onToggleDemolish,
   empireName,
   onChangeEmpireName,
+  rallyMode = false,
+  onToggleRally,
+  onCancelQueueItem,
+  onRingTownBell,
+  onFocusKeep,
+  onFocusGhostBreach,
+  onFilterSelectedKind,
 }: EmpireHudProps) {
   const [preferredDockMode, setPreferredDockMode] = useState<'train' | 'build'>(
     mode === 'base_builder' ? 'build' : 'train',
@@ -1179,15 +1281,15 @@ export function EmpireHud({
                 type="button"
                 data-testid="hud-speed-toggle"
                 className={`pe-speed-btn pe-hud-tabular ${
-                  gameSpeed === 1.5 ? 'pe-speed-btn-fast' : ''
+                  gameSpeed > 1 ? 'pe-speed-btn-fast' : ''
                 }`}
-                title="Toggle Battle Speed (1× / 1.5×)"
+                title="Toggle Battle Speed (1× / 1.5× / 2×)"
                 aria-label={`Battle Speed ${gameSpeed}x`}
-                aria-pressed={gameSpeed === 1.5}
+                aria-pressed={gameSpeed > 1}
                 onClick={() => onToggleSpeed?.()}
               >
                 <EmpireIcon name="bolt" size={11} />
-                <span>{gameSpeed === 1.5 ? '1.5×' : '1×'}</span>
+                <span>{gameSpeed === 2 ? '2×' : gameSpeed === 1.5 ? '1.5×' : '1×'}</span>
               </button>
             </div>
           </header>
@@ -1507,7 +1609,49 @@ export function EmpireHud({
                 <span>+{Math.min(15, tamedHorsesCount * 5)}% Cav</span>
               </div>
             )}
+
+            {(snapshot.relicsTotal ?? 0) > 0 && (
+              <div
+                className="pe-horse-buff-badge pe-hud-tabular"
+                title="Sacred Relics enshrined — steady +Gold income"
+              >
+                <EmpireIcon name="relic" size={11} />
+                <span>
+                  Relics {snapshot.relicsPlayer ?? 0}/{snapshot.relicsTotal}
+                </span>
+              </div>
+            )}
+
+            {snapshot.townBellActive && (
+              <div
+                className="pe-bell-badge pe-hud-tabular"
+                title="Town Bell active — Villagers garrisoned & Keep firing faster"
+              >
+                <EmpireIcon name="bell" size={11} />
+                <span>Bell {Math.max(1, Math.ceil(snapshot.townBellSec ?? 0))}s</span>
+              </div>
+            )}
           </div>
+
+          {!isBaseBuilder && snapshot.ghostBreach && (
+            <button
+              type="button"
+              onClick={() => onFocusGhostBreach?.()}
+              className="pe-whisper-pill pe-hud-tabular"
+              style={{
+                cursor: 'pointer',
+                borderColor: 'rgba(192, 132, 252, 0.58)',
+                background: 'rgba(30, 18, 48, 0.62)',
+                color: '#f3e8ff',
+              }}
+              title="Tap to inspect fastest rival river breach"
+            >
+              <EmpireIcon name="bolt" size={11} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                u/{stripEmoji(snapshot.ghostBreach.username)} breached ({formatMmSs(snapshot.ghostBreach.timeSec)})
+              </span>
+            </button>
+          )}
 
           {whisper && (
             <div data-testid="hud-whisper-pill" className="pe-whisper-pill">
@@ -1536,6 +1680,118 @@ export function EmpireHud({
 
       {/* BOTTOM-CENTER FLOATING GLASS PILL DOCK */}
       <footer data-testid="hud-bottom-dock" className="pe-dock-floating">
+        {/* Contextual Selection & Building Inspector Strip */}
+        {!isBaseBuilder &&
+          (snapshot.selectedBuilding ||
+            (snapshot.selectedUnitGroups && snapshot.selectedUnitGroups.length > 0)) && (
+            <div data-testid="hud-selection-inspector" className="pe-inspector-strip pe-hud-tabular">
+              {snapshot.selectedBuilding ? (
+                (() => {
+                  const sb = snapshot.selectedBuilding;
+                  const bSpec = BUILDINGS[sb.kind];
+                  const canRally =
+                    sb.kind !== 'homestead' && sb.kind !== 'farm' && sb.kind !== 'stone_wall';
+                  return (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' }}>
+                        <EmpireIcon name={sb.kind} size={13} />
+                        <span style={{ fontWeight: 800, color: '#fef3c7' }}>{bSpec.shortName}</span>
+                        <span style={{ color: 'rgba(203, 213, 225, 0.85)', fontSize: '10px' }}>
+                          {Math.ceil(sb.hp)}/{sb.maxHp} HP
+                        </span>
+                        {sb.queue.length > 0 && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                            <span style={{ color: '#93c5fd', fontSize: '10px', fontWeight: 800 }}>
+                              {sb.trainProgressPct}%
+                            </span>
+                            {sb.queue.map((qk, idx) => (
+                              <button
+                                key={`${qk}-${idx}`}
+                                type="button"
+                                className="pe-inspector-chip"
+                                title={`Cancel ${UNITS[qk].shortName} (100% refund)`}
+                                onClick={() => onCancelQueueItem?.(sb.id, idx)}
+                              >
+                                <EmpireIcon name="close" size={9} />
+                                <span>{UNITS[qk].shortName}</span>
+                              </button>
+                            ))}
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto' }}>
+                        {canRally && (
+                          <button
+                            type="button"
+                            data-testid="hud-rally-btn"
+                            aria-pressed={Boolean(rallyMode)}
+                            className={`pe-inspector-chip ${rallyMode ? 'pe-inspector-chip-active' : ''}`}
+                            title="Tap any tile on the map (or right-click) to set spawn rally point"
+                            onClick={() => onToggleRally?.()}
+                          >
+                            <EmpireIcon name="rally" size={11} />
+                            <span>{rallyMode ? 'Tap Map…' : 'Rally'}</span>
+                          </button>
+                        )}
+                        {sb.kind === 'town_center' && (
+                          <button
+                            type="button"
+                            data-testid="hud-town-bell-btn"
+                            aria-pressed={Boolean(snapshot.townBellActive)}
+                            className={`pe-inspector-chip ${
+                              snapshot.townBellActive ? 'pe-inspector-chip-active' : ''
+                            }`}
+                            title="Ring Town Bell [B] — Shelter villagers & fire Keep arrows faster"
+                            onClick={() => onRingTownBell?.()}
+                          >
+                            <EmpireIcon name="bell" size={11} />
+                            <span>{snapshot.townBellActive ? 'All Clear' : 'Town Bell'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()
+              ) : (
+                (() => {
+                  const groups = snapshot.selectedUnitGroups ?? [];
+                  const totalHp = groups.reduce((acc, g) => acc + Math.ceil(g.totalHp), 0);
+                  const totalMax = groups.reduce((acc, g) => acc + Math.ceil(g.maxHp), 0);
+                  const primaryHint =
+                    groups.length === 1
+                      ? UNIT_ROLE_HINTS[groups[0].kind]
+                      : 'Mixed Formation · Click chip to filter';
+                  return (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                        {groups.map((g) => (
+                          <button
+                            key={g.kind}
+                            type="button"
+                            className="pe-inspector-chip"
+                            title={`Filter to ${UNITS[g.kind].name}`}
+                            onClick={() => onFilterSelectedKind?.(g.kind)}
+                          >
+                            <span>
+                              {UNITS[g.kind].shortName} ×{g.count}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', fontSize: '10px', color: '#fde68a', fontWeight: 700 }}>
+                        <span>{primaryHint}</span>
+                        <span style={{ color: 'rgba(203, 213, 225, 0.85)' }}>
+                          {totalHp}/{totalMax} HP
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()
+              )}
+            </div>
+          )}
+
         {/* Slim Top Row of Micro-Pills */}
         <div className="pe-dock-top-row">
           <div className="pe-squad-strip">
@@ -1568,6 +1824,19 @@ export function EmpireHud({
               >
                 <EmpireIcon name="monk" size={11} />
                 <span>Monks ({snapshot.monkCount})</span>
+              </button>
+            )}
+
+            {!isBaseBuilder && (
+              <button
+                type="button"
+                data-testid="hud-keep-btn"
+                className="pe-micro-pill"
+                title="Select & focus your Town Center [H]"
+                onClick={() => onFocusKeep?.()}
+              >
+                <EmpireIcon name="keep" size={11} />
+                <span>Keep</span>
               </button>
             )}
 

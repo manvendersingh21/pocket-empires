@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { generateDailySpec } from '../engine/dailyGenerator.js';
 import { BIOMES, CIVS, DAILY_MODIFIERS, type BiomeDef } from '../types/rts.js';
-import { CivCrest, EmpireIcon } from '../ui/EmpireIcons.js';
+import { CivCrest, EmpireIcon, stripEmoji } from '../ui/EmpireIcons.js';
 import { useMountTask } from './hooks.js';
 import { journeys } from './telemetry.js';
 
@@ -13,6 +13,10 @@ if (!isLocalSplash) journeys.appReady();
 interface DailyPulsePayload {
   totalPlays?: number;
   totalWololos?: number;
+  leaderboard?: Array<{
+    username?: string;
+    score?: number;
+  }>;
   community?: {
     totalPlays?: number;
     totalWololos?: number;
@@ -313,7 +317,12 @@ function MiniDioramaCrest({ biome }: { biome: BiomeDef }) {
 function Splash() {
   const spec = useMemo(() => generateDailySpec(), []);
   const username = useMemo(() => readRedditUsername(), []);
-  const [pulse, setPulse] = useState<{ totalPlays: number; totalWololos: number } | null>(null);
+  const [pulse, setPulse] = useState<{
+    totalPlays: number;
+    totalWololos: number;
+    topLeader?: string;
+    topScore?: number;
+  } | null>(null);
 
   const pCiv = CIVS[spec.playerCiv];
   const eCiv = CIVS[spec.enemyCiv];
@@ -323,20 +332,34 @@ function Splash() {
   const secs = String(spec.parSec % 60).padStart(2, '0');
 
   useMountTask(() => {
-    if (isLocalSplash) return;
+    if (!window.location.protocol.startsWith('http')) return;
     const ctrl = new AbortController();
     fetch('/api/empire/daily?date=' + encodeURIComponent(spec.dateKey), {
       signal: ctrl.signal,
     })
-      .then((res) => (res.ok ? (res.json() as Promise<DailyPulsePayload>) : null))
+      .then((res) => {
+        if (!res.ok) return null;
+        const ct = res.headers.get('content-type') ?? '';
+        if (!ct.includes('application/json')) return null;
+        return res.json() as Promise<DailyPulsePayload>;
+      })
       .then((data) => {
         if (!data) return;
         const totalPlays = data.community?.totalPlays ?? data.totalPlays ?? 0;
         const totalWololos = data.community?.totalWololos ?? data.totalWololos ?? 0;
-        if (typeof totalPlays === 'number' && totalPlays > 0) {
+        const leader = data.leaderboard?.[0];
+        const topLeader =
+          leader && typeof leader.username === 'string' ? stripEmoji(leader.username) : undefined;
+        const topScore =
+          leader && typeof leader.score === 'number' && Number.isFinite(leader.score)
+            ? leader.score
+            : undefined;
+        if ((typeof totalPlays === 'number' && totalPlays > 0) || topLeader) {
           setPulse({
-            totalPlays,
+            totalPlays: typeof totalPlays === 'number' ? totalPlays : 0,
             totalWololos: typeof totalWololos === 'number' ? totalWololos : 0,
+            topLeader,
+            topScore,
           });
         }
       })
@@ -564,13 +587,16 @@ function Splash() {
         .pe-pulse {
           flex-shrink: 0;
           margin: 0;
-          padding: 0 10px;
+          padding: 0 8px;
           box-sizing: border-box;
           font-size: clamp(9.5px, 2.2vw, 11.5px);
           font-weight: 600;
           line-height: 1.22;
           color: #b8a688;
           max-width: 100%;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .pe-pulse-live {
           color: #fde68a;
@@ -583,6 +609,10 @@ function Splash() {
           .pe-cta-btn {
             padding: 8px 14px;
             font-size: 12px;
+          }
+          .pe-pulse {
+            font-size: 9px;
+            padding: 0 12px;
           }
         }
         @media (max-height: 360px) {
@@ -683,13 +713,22 @@ function Splash() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '4px',
-                flexWrap: 'wrap',
+                maxWidth: '100%',
+                whiteSpace: 'nowrap',
               }}
             >
-              <EmpireIcon name="flame" size={12} />
-              <span>{pulse.totalPlays.toLocaleString()} Commanders ·</span>
-              <EmpireIcon name="wololo" size={12} />
-              <span>{pulse.totalWololos.toLocaleString()} Wololo&apos;d today</span>
+              <EmpireIcon name={pulse.topLeader ? 'trophy' : 'flame'} size={11} />
+              {pulse.topLeader ? (
+                <span>
+                  #1 u/{pulse.topLeader}
+                  {pulse.topScore !== undefined ? ` (${pulse.topScore.toLocaleString()})` : ''} ·{' '}
+                  {pulse.totalPlays.toLocaleString()} Played ·
+                </span>
+              ) : (
+                <span>{pulse.totalPlays.toLocaleString()} Played ·</span>
+              )}
+              <EmpireIcon name="wololo" size={11} />
+              <span>{pulse.totalWololos.toLocaleString()} Wololo</span>
             </span>
           ) : (
             'Gather Wood & Gold · Train Knights & Monks · Raze the Rival Keep'

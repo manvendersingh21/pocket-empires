@@ -8,16 +8,34 @@ import {
   type AdvisorWhisper,
 } from '../ai/hybridAdvisor.js';
 import {
+  createEmptyCareerProfile,
+  getCareerRankInfo,
+  recordCareerMatch,
+  sanitizeCareerProfile,
+  type CareerProfile,
+} from '../engine/career.js';
+import {
+  evaluateDailyBounties,
+  generateDailyBounties,
+} from '../engine/dailyBounties.js';
+import {
   decodeSkirmishCode,
   encodeSkirmishCode,
   generateDailySpec,
 } from '../engine/dailyGenerator.js';
 import {
+  buildLiveDailyStandings,
+  computeRivalChallenge,
+} from '../engine/leaderboardModel.js';
+import {
   cmdAdvanceAge,
   cmdAttackEnemyKeep,
+  cmdCancelQueueItem,
   cmdDemolishBuilding,
   cmdIssueOrder,
   cmdPlaceBuilding,
+  cmdRingTownBell,
+  cmdSetRallyPoint,
   cmdTrainUnit,
   cmdTriggerTaunt,
   computeRaidDestruction,
@@ -32,9 +50,10 @@ import {
   stepGame,
 } from '../engine/sim.js';
 import IsoCanvas from '../rendering/IsoCanvas.js';
-import type { ClientMessage } from '../shared/messages.js';
+import type { ClientMessage, HallOfFameEntry } from '../shared/messages.js';
 import type {
   BuildingKind,
+  DifficultyId,
   GameState,
   PlayerBaseBlueprint,
   SkirmishSpec,
@@ -42,8 +61,12 @@ import type {
   UnitKind,
 } from '../types/rts.js';
 import ChronicleModal from '../ui/ChronicleModal.js';
-import EmpireHud, { type HudSnapshot } from '../ui/EmpireHud.js';
-import SettingsModal from '../ui/SettingsModal.js';
+import EmpireHud, {
+  type HudSnapshot,
+  type SelectedBuildingInspector,
+  type SelectedUnitGroupInspector,
+} from '../ui/EmpireHud.js';
+import SettingsModal, { type SettingsTabId } from '../ui/SettingsModal.js';
 import {
   flushStateSounds,
   playTauntSound,
@@ -63,7 +86,19 @@ import { journeys } from './telemetry.js';
 
 const READY: ClientMessage = { type: 'READY', app: 'momentum', version: 1 };
 const isLocalHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-const hasApiServer = !isLocalHost || window.location.port === '3000';
+
+async function fetchApiJson<T>(url: string, init?: RequestInit): Promise<T | null> {
+  if (!window.location.protocol.startsWith('http')) return null;
+  try {
+    const res = await fetch(url, init);
+    if (!res.ok) return null;
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('application/json')) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
 
 const LOCAL_FALLBACK_BASES: PlayerBaseBlueprint[] = [
   {
@@ -147,7 +182,11 @@ function saveLocal(key: string, value: unknown): void {
   }
 }
 
-function makeSnapshot(state: GameState): HudSnapshot {
+function makeSnapshot(
+  state: GameState,
+  selectedBuildingId: number | null = null,
+  selectedUnitIds: readonly number[] = [],
+): HudSnapshot {
   const pop = getTeamPop(state, 'player');
   let idleVillagerCount = 0;
   let villagerCount = 0;
@@ -174,6 +213,64 @@ function makeSnapshot(state: GameState): HudSnapshot {
       unitQueues[q.unit] = (unitQueues[q.unit] ?? 0) + 1;
     }
   }
+
+  const relicsTotal = state.relics?.length ?? 0;
+  const relicsPlayer =
+    state.relics?.filter((r) => r.owner === 'player').length ?? 0;
+  const townBellSec = state.townBellSec ?? 0;
+
+  let selectedBuilding: SelectedBuildingInspector | null = null;
+  if (selectedBuildingId !== null) {
+    const sb = state.buildings.find(
+      (b) => b.id === selectedBuildingId && b.team === 'player' && b.hp > 0,
+    );
+    if (sb) {
+      const head = sb.queue[0];
+      const trainProgressPct =
+        head && head.totalSec > 0
+          ? Math.max(
+              0,
+              Math.min(
+                100,
+                Math.round(((head.totalSec - head.remainingSec) / head.totalSec) * 100),
+              ),
+            )
+          : 0;
+      selectedBuilding = {
+        id: sb.id,
+        kind: sb.kind,
+        hp: sb.hp,
+        maxHp: sb.maxHp,
+        built: sb.built,
+        queue: sb.queue.map((q) => q.unit),
+        trainProgressPct,
+      };
+    }
+  }
+
+  let selectedUnitGroups: SelectedUnitGroupInspector[] = [];
+  if (selectedUnitIds.length > 0 && selectedBuilding === null) {
+    const selSet = new Set(selectedUnitIds);
+    const byKind = new Map<UnitKind, SelectedUnitGroupInspector>();
+    for (const u of state.units) {
+      if (!selSet.has(u.id) || u.team !== 'player' || u.hp <= 0) continue;
+      const prev = byKind.get(u.kind);
+      if (prev) {
+        prev.count += 1;
+        prev.totalHp += u.hp;
+        prev.maxHp += u.maxHp;
+      } else {
+        byKind.set(u.kind, {
+          kind: u.kind,
+          count: 1,
+          totalHp: u.hp,
+          maxHp: u.maxHp,
+        });
+      }
+    }
+    selectedUnitGroups = Array.from(byKind.values());
+  }
+
   return {
     resources: { ...state.resources.player },
     popCurrent: pop.current,
@@ -189,6 +286,13 @@ function makeSnapshot(state: GameState): HudSnapshot {
     playerAge: state.ages?.player ?? 1,
     tamedHorses: countTamedHorses(state, 'player'),
     raidDestructionPct: computeRaidDestruction(state).destructionPct,
+    relicsPlayer,
+    relicsTotal,
+    townBellActive: townBellSec > 0,
+    townBellSec,
+    ghostBreach: state.ghostBreach ?? null,
+    selectedBuilding,
+    selectedUnitGroups,
   };
 }
 
@@ -210,9 +314,19 @@ export default function App() {
 
   const [screen, setScreen] = useState<'war_room' | 'game'>('war_room');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabId>('settings');
   const [showMinimap, setShowMinimap] = useState(true);
   const [publishStatus, setPublishStatus] = useState<'idle' | 'publishing' | 'published' | 'saved'>('idle');
   const [demolishMode, setDemolishMode] = useState(false);
+  const [rallyMode, setRallyMode] = useState(false);
+  const [difficulty, setDifficulty] = useState<DifficultyId>('standard');
+  const [career, setCareer] = useState<CareerProfile>(() =>
+    sanitizeCareerProfile(loadLocal('empire:career:v1', createEmptyCareerProfile())),
+  );
+  const [lastXpGained, setLastXpGained] = useState(0);
+  const [focusTarget, setFocusTarget] = useState<{ tileX: number; tileY: number; seq: number } | null>(
+    null,
+  );
   const [empireName, setEmpireName] = useState<string>(
     () => myBase?.empireName ?? 'Royal Homestead',
   );
@@ -222,8 +336,17 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<HudSnapshot>(() => makeSnapshot(stateRef.current));
   const [selectedUnitIds, setSelectedUnitIds] = useState<number[]>([]);
   const [selectedBuildingId, setSelectedBuildingId] = useState<number | null>(null);
+  const selectedUnitIdsRef = useRef<number[]>([]);
+  selectedUnitIdsRef.current = selectedUnitIds;
+  const selectedBuildingIdRef = useRef<number | null>(null);
+  selectedBuildingIdRef.current = selectedBuildingId;
+  const focusSeqRef = useRef(1);
+  const idleCycleRef = useRef(0);
+  const lastGroupKeyRef = useRef<{ key: string; atMs: number } | null>(null);
+  const controlGroupsRef = useRef<Record<string, number[]>>({});
+
   const [placementKind, setPlacementKind] = useState<BuildingKind | null>(null);
-  const [gameSpeed, setGameSpeed] = useState<1 | 1.5>(1);
+  const [gameSpeed, setGameSpeed] = useState<1 | 1.5 | 2>(1);
   const [muted, setMutedState] = useState(false);
   const [whisper, setWhisper] = useState<AdvisorWhisper | null>(null);
   const [aiModeLabel, setAiModeLabel] = useState('Royal War-Council Tactician');
@@ -236,6 +359,7 @@ export default function App() {
   const [rank, setRank] = useState<number | null>(null);
   const [flairText, setFlairText] = useState<string | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
+  const [hallOfFame, setHallOfFame] = useState<HallOfFameEntry[]>([]);
   const [community, setCommunity] = useState<CommunityWarStats>({
     totalPlays: 0,
     totalWins: 0,
@@ -243,6 +367,9 @@ export default function App() {
     topStrategy: 'Wololo Cult',
     fastestCommander: null,
   });
+
+  const dailyBounties = useMemo(() => generateDailyBounties(dailySpec), [dailySpec]);
+  const activeBounties = useMemo(() => generateDailyBounties(activeSpec), [activeSpec]);
 
   const [epigraph, setEpigraph] = useState('Sound the horn and march across the ford!');
   const [commentStatus, setCommentStatus] = useState<
@@ -252,42 +379,38 @@ export default function App() {
   const matchIdRef = useRef(0);
 
   const fetchWarRoomAndBases = useCallback(async () => {
-    if (!hasApiServer) return;
-    try {
-      const [dailyRes, basesRes] = await Promise.all([
-        fetch(`/api/empire/daily?date=${encodeURIComponent(dailySpec.dateKey)}`),
-        fetch('/api/empire/bases'),
-      ]);
-      if (dailyRes.ok) {
-        const data = (await dailyRes.json()) as {
-          leaderboard?: LeaderboardRow[];
-          community?: CommunityWarStats;
-          player?: { streak?: number; bestScore?: number | null; rank?: number | null };
-        };
-        if (data.leaderboard) setLeaderboard(data.leaderboard);
-        if (data.community) setCommunity(data.community);
-        if (data.player) {
-          if (typeof data.player.streak === 'number') setStreak(data.player.streak);
-          if (typeof data.player.bestScore === 'number') setBestScore(data.player.bestScore);
-          setRank(data.player.rank ?? null);
-        }
+    const [dailyData, basesData] = await Promise.all([
+      fetchApiJson<{
+        leaderboard?: LeaderboardRow[];
+        hallOfFame?: HallOfFameEntry[];
+        community?: CommunityWarStats;
+        player?: { streak?: number; bestScore?: number | null; rank?: number | null };
+      }>(`/api/empire/daily?date=${encodeURIComponent(dailySpec.dateKey)}`),
+      fetchApiJson<{
+        bases?: PlayerBaseBlueprint[];
+        myBase?: PlayerBaseBlueprint | null;
+      }>('/api/empire/bases'),
+    ]);
+
+    if (dailyData) {
+      if (dailyData.leaderboard) setLeaderboard(dailyData.leaderboard);
+      if (dailyData.hallOfFame) setHallOfFame(dailyData.hallOfFame);
+      if (dailyData.community) setCommunity(dailyData.community);
+      if (dailyData.player) {
+        if (typeof dailyData.player.streak === 'number') setStreak(dailyData.player.streak);
+        if (typeof dailyData.player.bestScore === 'number') setBestScore(dailyData.player.bestScore);
+        setRank(dailyData.player.rank ?? null);
       }
-      if (basesRes.ok) {
-        const bData = (await basesRes.json()) as {
-          bases?: PlayerBaseBlueprint[];
-          myBase?: PlayerBaseBlueprint | null;
-        };
-        if (bData.bases && bData.bases.length > 0) {
-          setPlayerBases(bData.bases);
-        }
-        if (bData.myBase) {
-          setMyBase(bData.myBase);
-          setEmpireName(bData.myBase.empireName);
-          saveLocal('empire:myBase', bData.myBase);
-        }
+    }
+    if (basesData) {
+      if (basesData.bases && basesData.bases.length > 0) {
+        setPlayerBases(basesData.bases);
       }
-    } catch {
-      return;
+      if (basesData.myBase) {
+        setMyBase(basesData.myBase);
+        setEmpireName(basesData.myBase.empireName);
+        saveLocal('empire:myBase', basesData.myBase);
+      }
     }
   }, [dailySpec.dateKey]);
 
@@ -295,31 +418,40 @@ export default function App() {
     void detectHybridAICapability().then((cap) => {
       setAiModeLabel(cap.modeLabel);
     });
-    if (hasApiServer) {
-      void fetch('/api/ping', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(READY),
-      }).catch(() => undefined);
-      void fetchWarRoomAndBases();
-    }
+    void fetchApiJson('/api/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(READY),
+    });
+    void fetchWarRoomAndBases();
   });
+
+  const panToTile = useCallback((tileX: number, tileY: number) => {
+    focusSeqRef.current += 1;
+    setFocusTarget({ tileX, tileY, seq: focusSeqRef.current });
+  }, []);
 
   const mountInteractiveState = useCallback((next: GameState) => {
     unlockAudio();
     matchIdRef.current += 1;
     completionHandledRef.current = '';
     accRef.current = 0;
+    controlGroupsRef.current = {};
     stateRef.current = next;
     setActiveSpec(next.spec);
-    setSnapshot(makeSnapshot(next));
     const idleV = next.units.find(
       (u) => u.team === 'player' && u.kind === 'villager' && u.order.type === 'idle',
     );
-    setSelectedUnitIds(idleV ? [idleV.id] : []);
+    const initUnitIds = idleV ? [idleV.id] : [];
+    selectedUnitIdsRef.current = initUnitIds;
+    selectedBuildingIdRef.current = null;
+    setSelectedUnitIds(initUnitIds);
     setSelectedBuildingId(null);
+    setSnapshot(makeSnapshot(next, null, initUnitIds));
     setPlacementKind(null);
     setDemolishMode(false);
+    setRallyMode(false);
+    setLastXpGained(0);
     setCommentStatus('idle');
     setPublishStatus('idle');
     setFlairText(null);
@@ -330,7 +462,10 @@ export default function App() {
 
   const startSkirmish = useCallback(
     (spec: SkirmishSpec) => {
-      const next = createInitialState(spec);
+      const next = createInitialState({
+        ...spec,
+        difficulty: spec.difficulty ?? difficulty,
+      });
       if (community.fastestCommander) {
         next.ghostBreach = {
           username: community.fastestCommander.username,
@@ -342,7 +477,7 @@ export default function App() {
       mountInteractiveState(next);
       if (!isLocalHost) journeys.start();
     },
-    [community.fastestCommander, mountInteractiveState],
+    [community.fastestCommander, difficulty, mountInteractiveState],
   );
 
   const openMyBaseBuilder = useCallback(() => {
@@ -362,6 +497,9 @@ export default function App() {
     setSettingsOpen(false);
     setPlacementKind(null);
     setDemolishMode(false);
+    setRallyMode(false);
+    selectedUnitIdsRef.current = [];
+    selectedBuildingIdRef.current = null;
     setSelectedUnitIds([]);
     setSelectedBuildingId(null);
     const ambient = createBaseBuilderState(myBase);
@@ -380,41 +518,31 @@ export default function App() {
     saveLocal('empire:myBase', blueprint);
     setPlayerBases((prev) => [blueprint, ...prev.filter((b) => b.owner !== blueprint.owner)]);
 
-    if (!hasApiServer) {
-      setPublishStatus('saved');
-      return;
-    }
-
     setPublishStatus('publishing');
-    try {
-      const res = await fetch('/api/empire/bases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          empireName: blueprint.empireName,
-          civ: blueprint.civ,
-          biome: blueprint.biome,
-          buildings: blueprint.buildings,
-          garrison: blueprint.garrison,
-        }),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as {
-          saved?: boolean;
-          base?: PlayerBaseBlueprint;
-          bases?: PlayerBaseBlueprint[];
-        };
-        if (data.base) {
-          setMyBase(data.base);
-          setEmpireName(data.base.empireName);
-          saveLocal('empire:myBase', data.base);
-        }
-        if (data.bases) setPlayerBases(data.bases);
-        setPublishStatus('published');
-      } else {
-        setPublishStatus('saved');
+    const data = await fetchApiJson<{
+      saved?: boolean;
+      base?: PlayerBaseBlueprint;
+      bases?: PlayerBaseBlueprint[];
+    }>('/api/empire/bases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        empireName: blueprint.empireName,
+        civ: blueprint.civ,
+        biome: blueprint.biome,
+        buildings: blueprint.buildings,
+        garrison: blueprint.garrison,
+      }),
+    });
+    if (data) {
+      if (data.base) {
+        setMyBase(data.base);
+        setEmpireName(data.base.empireName);
+        saveLocal('empire:myBase', data.base);
       }
-    } catch {
+      if (data.bases) setPlayerBases(data.bases);
+      setPublishStatus('published');
+    } else {
       setPublishStatus('saved');
     }
   }, [empireName, myBase]);
@@ -427,6 +555,23 @@ export default function App() {
       completionHandledRef.current = key;
 
       const summary = computeScoreSummary(st);
+      const evaluated = evaluateDailyBounties(st, generateDailyBounties(st.spec));
+      const bountyBonus = summary.victory
+        ? evaluated.filter((b) => b.completed).reduce((acc, b) => acc + b.bonusScore, 0)
+        : 0;
+      const totalScore = summary.score + bountyBonus;
+      const completedIds = evaluated.filter((b) => b.completed).map((b) => b.id);
+
+      const { nextProfile, xpGained } = recordCareerMatch(
+        career,
+        st,
+        completedIds,
+        totalScore,
+      );
+      setCareer(nextProfile);
+      setLastXpGained(xpGained);
+      saveLocal('empire:career:v1', nextProfile);
+
       let nextStreak = streak;
       if (summary.victory && !st.spec.isCustom && st.mode !== 'raid') {
         if (lastWinDate !== st.spec.dateKey) {
@@ -439,7 +584,7 @@ export default function App() {
           saveLocal('empire:streak', nextStreak);
           saveLocal('empire:lastWinDate', st.spec.dateKey);
         }
-        const updatedBest = Math.max(bestScore ?? 0, summary.score);
+        const updatedBest = Math.max(bestScore ?? 0, totalScore);
         setBestScore(updatedBest);
         saveLocal(`empire:best:${st.spec.dateKey}`, updatedBest);
       }
@@ -448,57 +593,50 @@ export default function App() {
         setEpigraph(res.epigraph);
       });
 
-      if (hasApiServer) {
-        if (!isLocalHost) journeys.end(summary.victory, summary.timeSec);
-        if (st.mode === 'raid' && st.raidTargetOwner) {
-          void fetch('/api/empire/raid', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              defender: st.raidTargetOwner,
-              victory: summary.victory,
-            }),
-          })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data: { bases?: PlayerBaseBlueprint[] } | null) => {
-              if (data?.bases) setPlayerBases(data.bases);
-            })
-            .catch(() => undefined);
-        } else if (!st.spec.isCustom) {
-          void fetch('/api/empire/complete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              dateKey: st.spec.dateKey,
-              victory: summary.victory,
-              score: summary.score,
-              timeSec: summary.timeSec,
-              crowns: summary.crowns,
-              strategy: summary.strategyLabel,
-              wololos: st.stats.wololoConversions,
-            }),
-          })
-            .then((r) => r.json())
-            .then(
-              (data: {
-                leaderboard?: LeaderboardRow[];
-                community?: CommunityWarStats;
-                rank?: number | null;
-                streak?: number;
-                flairAwarded?: string | null;
-              }) => {
-                if (data.leaderboard) setLeaderboard(data.leaderboard);
-                if (data.community) setCommunity(data.community);
-                if (data.rank !== undefined) setRank(data.rank);
-                if (typeof data.streak === 'number') setStreak(data.streak);
-                if (data.flairAwarded) setFlairText(data.flairAwarded);
-              },
-            )
-            .catch(() => undefined);
-        }
+      if (!isLocalHost) journeys.end(summary.victory, summary.timeSec);
+      if (st.mode === 'raid' && st.raidTargetOwner) {
+        void fetchApiJson<{ bases?: PlayerBaseBlueprint[] }>('/api/empire/raid', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            defender: st.raidTargetOwner,
+            victory: summary.victory,
+          }),
+        }).then((data) => {
+          if (data?.bases) setPlayerBases(data.bases);
+        });
+      } else if (!st.spec.isCustom) {
+        void fetchApiJson<{
+          leaderboard?: LeaderboardRow[];
+          hallOfFame?: HallOfFameEntry[];
+          community?: CommunityWarStats;
+          rank?: number | null;
+          streak?: number;
+          flairAwarded?: string | null;
+        }>('/api/empire/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dateKey: st.spec.dateKey,
+            victory: summary.victory,
+            score: totalScore,
+            timeSec: summary.timeSec,
+            crowns: summary.crowns,
+            strategy: summary.strategyLabel,
+            wololos: st.stats.wololoConversions,
+          }),
+        }).then((data) => {
+          if (!data) return;
+          if (data.leaderboard) setLeaderboard(data.leaderboard);
+          if (data.hallOfFame) setHallOfFame(data.hallOfFame);
+          if (data.community) setCommunity(data.community);
+          if (data.rank !== undefined) setRank(data.rank);
+          if (typeof data.streak === 'number') setStreak(data.streak);
+          if (data.flairAwarded) setFlairText(data.flairAwarded);
+        });
       }
     },
-    [streak, lastWinDate, bestScore],
+    [bestScore, career, lastWinDate, streak],
   );
 
   useFixedSimulationLoop(true, screen === 'war_room' ? 0.5 : gameSpeed, (elapsedSec) => {
@@ -527,14 +665,21 @@ export default function App() {
     }
 
     if (stepped && (st.tick % 3 === 0 || st.outcome !== 'playing')) {
-      setSnapshot(makeSnapshot(st));
-      setSelectedUnitIds((prev) => {
-        if (prev.length === 0) return prev;
-        const alive = prev.filter((id) =>
-          st.units.some((u) => u.id === id && u.team === 'player' && u.hp > 0),
-        );
-        return alive.length === prev.length ? prev : alive;
-      });
+      const aliveSel = selectedUnitIdsRef.current.filter((id) =>
+        st.units.some((u) => u.id === id && u.team === 'player' && u.hp > 0),
+      );
+      if (aliveSel.length !== selectedUnitIdsRef.current.length) {
+        selectedUnitIdsRef.current = aliveSel;
+        setSelectedUnitIds(aliveSel);
+      }
+      if (
+        selectedBuildingIdRef.current !== null &&
+        !st.buildings.some((b) => b.id === selectedBuildingIdRef.current && b.team === 'player' && b.hp > 0)
+      ) {
+        selectedBuildingIdRef.current = null;
+        setSelectedBuildingId(null);
+      }
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, aliveSel));
     }
 
     if (stepped && st.tick % 90 === 0 && st.outcome === 'playing') {
@@ -545,6 +690,22 @@ export default function App() {
       handleMatchCompletion(st);
     }
   });
+
+  const handleFocusKeep = useCallback(() => {
+    unlockAudio();
+    const st = stateRef.current;
+    const tc = st.buildings.find((b) => b.team === 'player' && b.kind === 'town_center' && b.hp > 0);
+    if (!tc) return;
+    setPlacementKind(null);
+    setDemolishMode(false);
+    setRallyMode(false);
+    selectedUnitIdsRef.current = [];
+    selectedBuildingIdRef.current = tc.id;
+    setSelectedUnitIds([]);
+    setSelectedBuildingId(tc.id);
+    setSnapshot(makeSnapshot(st, tc.id, []));
+    panToTile(tc.tileX + tc.size * 0.5, tc.tileY + tc.size * 0.5);
+  }, [panToTile]);
 
   useWindowKeydown(screen === 'game', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -592,9 +753,22 @@ export default function App() {
       st.stats.cheekyWololo = true;
       st.stats.enemyUnitsSlain = 9;
       st.stats.enemyBuildingsRazed = 2;
+      if (!st.timeline) st.timeline = [];
+      if (st.timeline.length < 2) {
+        st.timeline.push({ t: 56, playerPower: 290, enemyPower: 240 });
+      }
+      st.timeline.push({ t: 112, playerPower: 520, enemyPower: 65 });
       flushStateSounds(st.soundEvents);
-      setSnapshot(makeSnapshot(st));
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIdsRef.current));
       handleMatchCompletion(st);
+      return;
+    }
+
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && ['1', '2', '3', '4'].includes(e.key)) {
+      e.preventDefault();
+      if (selectedUnitIdsRef.current.length > 0) {
+        controlGroupsRef.current[e.key] = [...selectedUnitIdsRef.current];
+      }
       return;
     }
 
@@ -602,36 +776,99 @@ export default function App() {
 
     if (e.key === 'Escape') {
       if (settingsOpen) setSettingsOpen(false);
+      else if (rallyMode) setRallyMode(false);
       else if (demolishMode) setDemolishMode(false);
       else setPlacementKind(null);
       return;
     }
-    if (e.key === '1') {
-      const ids = st.units
-        .filter((u) => u.team === 'player' && u.hp > 0 && u.kind !== 'villager')
-        .map((u) => u.id);
-      setSelectedUnitIds(ids);
-      setSelectedBuildingId(null);
-    } else if (e.key === '2') {
+
+    if (['1', '2', '3', '4'].includes(e.key)) {
+      const savedIds = (controlGroupsRef.current[e.key] ?? []).filter((id) =>
+        st.units.some((u) => u.id === id && u.team === 'player' && u.hp > 0),
+      );
+      let chosenIds = savedIds;
+      if (chosenIds.length === 0) {
+        if (e.key === '1') {
+          chosenIds = st.units
+            .filter((u) => u.team === 'player' && u.hp > 0 && u.kind !== 'villager')
+            .map((u) => u.id);
+        } else if (e.key === '2') {
+          const idle = st.units.filter(
+            (u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager' && u.order.type === 'idle',
+          );
+          const pool =
+            idle.length > 0
+              ? idle
+              : st.units.filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager');
+          chosenIds = pool.map((u) => u.id);
+        } else if (e.key === '3') {
+          chosenIds = st.units
+            .filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'monk')
+            .map((u) => u.id);
+        } else if (e.key === '4') {
+          chosenIds = st.units
+            .filter(
+              (u) => u.team === 'player' && u.hp > 0 && (u.kind === 'knight' || u.kind === 'scout'),
+            )
+            .map((u) => u.id);
+        }
+      }
+      if (chosenIds.length > 0 || savedIds.length > 0 || e.key === '1' || e.key === '2') {
+        selectedUnitIdsRef.current = chosenIds;
+        selectedBuildingIdRef.current = null;
+        setSelectedUnitIds(chosenIds);
+        setSelectedBuildingId(null);
+        setRallyMode(false);
+        setSnapshot(makeSnapshot(st, null, chosenIds));
+        const now = performance.now();
+        const prev = lastGroupKeyRef.current;
+        if (prev && prev.key === e.key && now - prev.atMs < 400 && chosenIds.length > 0) {
+          const u = st.units.find((x) => x.id === chosenIds[0]);
+          if (u) panToTile(u.x, u.y);
+          lastGroupKeyRef.current = null;
+        } else {
+          lastGroupKeyRef.current = { key: e.key, atMs: now };
+        }
+      }
+    } else if (e.key === '.') {
       const idle = st.units.filter(
         (u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager' && u.order.type === 'idle',
       );
-      const pool =
-        idle.length > 0
-          ? idle
-          : st.units.filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager');
-      setSelectedUnitIds(pool.map((u) => u.id));
-      setSelectedBuildingId(null);
-    } else if (e.key === '3') {
-      const monks = st.units
-        .filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'monk')
-        .map((u) => u.id);
-      if (monks.length > 0) setSelectedUnitIds(monks);
+      if (idle.length > 0) {
+        const pickU = idle[idleCycleRef.current % idle.length];
+        idleCycleRef.current += 1;
+        selectedUnitIdsRef.current = [pickU.id];
+        selectedBuildingIdRef.current = null;
+        setSelectedUnitIds([pickU.id]);
+        setSelectedBuildingId(null);
+        setRallyMode(false);
+        setSnapshot(makeSnapshot(st, null, [pickU.id]));
+        panToTile(pickU.x, pickU.y);
+      }
+    } else if (e.key.toLowerCase() === 'h') {
+      handleFocusKeep();
+    } else if (e.key.toLowerCase() === 'b') {
+      unlockAudio();
+      if (cmdRingTownBell(st, 'player')) {
+        flushStateSounds(st.soundEvents);
+        setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIdsRef.current));
+      }
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      if (selectedUnitIdsRef.current.length > 0) {
+        const u = st.units.find((x) => x.id === selectedUnitIdsRef.current[0] && x.hp > 0);
+        if (u) panToTile(u.x, u.y);
+      } else if (selectedBuildingIdRef.current !== null) {
+        const b = st.buildings.find((x) => x.id === selectedBuildingIdRef.current && x.hp > 0);
+        if (b) panToTile(b.tileX + b.size * 0.5, b.tileY + b.size * 0.5);
+      } else {
+        handleFocusKeep();
+      }
     } else if (e.key.toLowerCase() === 'g') {
       unlockAudio();
       if (cmdAdvanceAge(st, 'player')) {
         flushStateSounds(st.soundEvents);
-        setSnapshot(makeSnapshot(st));
+        setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIdsRef.current));
       }
     } else if (e.key.toLowerCase() === 'x' && st.mode === 'base_builder') {
       unlockAudio();
@@ -654,6 +891,7 @@ export default function App() {
       const bk = buildMap[e.key.toLowerCase()];
       if (bk) {
         setDemolishMode(false);
+        setRallyMode(false);
         setPlacementKind((prev) => (prev === bk ? null : bk));
       }
     }
@@ -664,29 +902,40 @@ export default function App() {
     const st = stateRef.current;
     setPlacementKind(null);
     setDemolishMode(false);
+    setRallyMode(false);
+    selectedBuildingIdRef.current = null;
     setSelectedBuildingId(null);
+    let nextIds: number[] = [];
     if (kind === 'idle_villager') {
       const idle = st.units.filter(
         (u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager' && u.order.type === 'idle',
       );
-      if (idle.length > 0) setSelectedUnitIds([idle[0].id]);
-      else {
-        const allV = st.units.filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager');
-        setSelectedUnitIds(allV.map((u) => u.id));
+      if (idle.length > 0) {
+        const pickU = idle[idleCycleRef.current % idle.length];
+        idleCycleRef.current += 1;
+        nextIds = [pickU.id];
+        panToTile(pickU.x, pickU.y);
+      } else {
+        nextIds = st.units
+          .filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager')
+          .map((u) => u.id);
       }
     } else if (kind === 'all_villagers') {
-      setSelectedUnitIds(
-        st.units.filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager').map((u) => u.id),
-      );
+      nextIds = st.units
+        .filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'villager')
+        .map((u) => u.id);
     } else if (kind === 'all_army') {
-      setSelectedUnitIds(
-        st.units.filter((u) => u.team === 'player' && u.hp > 0 && u.kind !== 'villager').map((u) => u.id),
-      );
+      nextIds = st.units
+        .filter((u) => u.team === 'player' && u.hp > 0 && u.kind !== 'villager')
+        .map((u) => u.id);
     } else if (kind === 'monks') {
-      setSelectedUnitIds(
-        st.units.filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'monk').map((u) => u.id),
-      );
+      nextIds = st.units
+        .filter((u) => u.team === 'player' && u.hp > 0 && u.kind === 'monk')
+        .map((u) => u.id);
     }
+    selectedUnitIdsRef.current = nextIds;
+    setSelectedUnitIds(nextIds);
+    setSnapshot(makeSnapshot(st, null, nextIds));
   };
 
   const handleIssueTileOrder = (tileX: number, tileY: number) => {
@@ -694,7 +943,7 @@ export default function App() {
     const st = stateRef.current;
     cmdIssueOrder(st, 'player', selectedUnitIds, tileX, tileY);
     flushStateSounds(st.soundEvents);
-    setSnapshot(makeSnapshot(st));
+    setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
   };
 
   const handlePlaceBuildingAt = (tileX: number, tileY: number) => {
@@ -707,7 +956,7 @@ export default function App() {
         setPlacementKind(null);
       }
       flushStateSounds(st.soundEvents);
-      setSnapshot(makeSnapshot(st));
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
     }
   };
 
@@ -716,7 +965,48 @@ export default function App() {
     const st = stateRef.current;
     if (cmdDemolishBuilding(st, 'player', tileX, tileY)) {
       flushStateSounds(st.soundEvents);
-      setSnapshot(makeSnapshot(st));
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
+    }
+  };
+
+  const handleSetRallyPoint = (buildingId: number, tileX: number, tileY: number) => {
+    unlockAudio();
+    const st = stateRef.current;
+    if (cmdSetRallyPoint(st, 'player', buildingId, tileX, tileY)) {
+      setRallyMode(false);
+      flushStateSounds(st.soundEvents);
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
+    }
+  };
+
+  const handleCancelQueueItem = (buildingId: number, queueIndex: number) => {
+    unlockAudio();
+    const st = stateRef.current;
+    if (cmdCancelQueueItem(st, 'player', buildingId, queueIndex)) {
+      flushStateSounds(st.soundEvents);
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
+    }
+  };
+
+  const handleRingTownBell = () => {
+    unlockAudio();
+    const st = stateRef.current;
+    if (cmdRingTownBell(st, 'player')) {
+      flushStateSounds(st.soundEvents);
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
+    }
+  };
+
+  const handleFilterSelectedKind = (kind: UnitKind) => {
+    unlockAudio();
+    const st = stateRef.current;
+    const filtered = selectedUnitIds.filter((id) =>
+      st.units.some((u) => u.id === id && u.team === 'player' && u.hp > 0 && u.kind === kind),
+    );
+    if (filtered.length > 0) {
+      selectedUnitIdsRef.current = filtered;
+      setSelectedUnitIds(filtered);
+      setSnapshot(makeSnapshot(st, null, filtered));
     }
   };
 
@@ -725,7 +1015,7 @@ export default function App() {
     const st = stateRef.current;
     if (cmdAdvanceAge(st, 'player')) {
       flushStateSounds(st.soundEvents);
-      setSnapshot(makeSnapshot(st));
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
     }
   };
 
@@ -735,7 +1025,7 @@ export default function App() {
     const ok = cmdTrainUnit(st, 'player', kind, selectedBuildingId ?? undefined);
     if (ok) {
       flushStateSounds(st.soundEvents);
-      setSnapshot(makeSnapshot(st));
+      setSnapshot(makeSnapshot(st, selectedBuildingIdRef.current, selectedUnitIds));
     }
   };
 
@@ -752,37 +1042,21 @@ export default function App() {
       formatChronicleComment(st, Math.max(1, streak)) +
       (code ? `\nChallenge Code: \`${code}\`` : '');
 
-    if (!hasApiServer) {
-      try {
-        await navigator.clipboard?.writeText(text);
-        setCommentStatus('copied');
-      } catch {
-        setCommentStatus('error');
-      }
+    setCommentStatus('posting');
+    const data = await fetchApiJson<{ posted?: boolean }>('/api/empire/comment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dateKey: st.spec.dateKey, text }),
+    });
+    if (data?.posted) {
+      setCommentStatus('posted');
       return;
     }
-
-    setCommentStatus('posting');
     try {
-      const res = await fetch('/api/empire/comment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dateKey: st.spec.dateKey, text }),
-      });
-      const data = (await res.json()) as { posted?: boolean };
-      if (data.posted) {
-        setCommentStatus('posted');
-      } else {
-        await navigator.clipboard?.writeText(text);
-        setCommentStatus('copied');
-      }
+      await navigator.clipboard?.writeText(text);
+      setCommentStatus('copied');
     } catch {
-      try {
-        await navigator.clipboard?.writeText(text);
-        setCommentStatus('copied');
-      } catch {
-        setCommentStatus('error');
-      }
+      setCommentStatus('error');
     }
   };
 
@@ -816,6 +1090,46 @@ export default function App() {
     setAudioMuted(next);
   };
 
+  const cycleSpeed = () => {
+    setGameSpeed((s) => (s === 1 ? 1.5 : s === 1.5 ? 2 : 1));
+  };
+
+  const isTerminalOutcome =
+    st.mode !== 'base_builder' && (st.outcome === 'victory' || st.outcome === 'defeat');
+  const chronicleBounties = isTerminalOutcome ? evaluateDailyBounties(st, activeBounties) : [];
+  const chronicleBountyBonus =
+    isTerminalOutcome && st.outcome === 'victory'
+      ? chronicleBounties.filter((b) => b.completed).reduce((acc, b) => acc + b.bonusScore, 0)
+      : 0;
+  const chronicleSummary = isTerminalOutcome ? computeScoreSummary(st) : null;
+  const chronicleTotalScore = chronicleSummary ? chronicleSummary.score + chronicleBountyBonus : 0;
+  const chronicleStandings = isTerminalOutcome
+    ? buildLiveDailyStandings(
+        st.spec,
+        leaderboard,
+        chronicleSummary?.victory
+          ? {
+              username: 'You',
+              score: chronicleTotalScore,
+              timeSec: chronicleSummary.timeSec,
+              crowns: chronicleSummary.crowns,
+              strategy: chronicleSummary.strategyLabel,
+              wololos: st.stats.wololoConversions,
+            }
+          : null,
+        rank,
+      )
+    : [];
+  const chronicleRivalBanner = isTerminalOutcome
+    ? computeRivalChallenge(
+        chronicleStandings,
+        chronicleSummary?.victory ? chronicleTotalScore : null,
+        chronicleSummary?.timeSec ?? null,
+        st.spec.parSec,
+      )
+    : undefined;
+  const careerRank = getCareerRankInfo(career.xp);
+
   return (
     <main
       style={{
@@ -836,22 +1150,38 @@ export default function App() {
         selectedBuildingId={selectedBuildingId}
         placementKind={placementKind}
         demolishMode={demolishMode}
+        rallyMode={rallyMode}
+        focusTarget={focusTarget}
         onSelectUnits={(ids) => {
           unlockAudio();
+          selectedUnitIdsRef.current = ids;
           setSelectedUnitIds(ids);
-          if (ids.length > 0) setSelectedBuildingId(null);
+          if (ids.length > 0) {
+            selectedBuildingIdRef.current = null;
+            setSelectedBuildingId(null);
+            setRallyMode(false);
+          }
+          setSnapshot(makeSnapshot(stateRef.current, selectedBuildingIdRef.current, ids));
         }}
         onSelectBuilding={(id) => {
           unlockAudio();
+          selectedBuildingIdRef.current = id;
           setSelectedBuildingId(id);
-          if (id !== null) setSelectedUnitIds([]);
+          setRallyMode(false);
+          if (id !== null) {
+            selectedUnitIdsRef.current = [];
+            setSelectedUnitIds([]);
+          }
+          setSnapshot(makeSnapshot(stateRef.current, id, selectedUnitIdsRef.current));
         }}
         onIssueTileOrder={handleIssueTileOrder}
         onPlaceBuildingAt={handlePlaceBuildingAt}
+        onSetRallyPoint={handleSetRallyPoint}
         onDemolishAt={handleDemolishAt}
         onCancelPlacement={() => {
           setPlacementKind(null);
           setDemolishMode(false);
+          setRallyMode(false);
         }}
       />
 
@@ -862,15 +1192,27 @@ export default function App() {
           bestScore={bestScore}
           rank={rank}
           leaderboard={leaderboard}
+          hallOfFame={hallOfFame}
           community={community}
           aiModeLabel={aiModeLabel}
           playerBases={playerBases}
           hasSavedBase={myBase !== null}
-          onPlayDaily={() => startSkirmish(dailySpec)}
+          difficulty={difficulty}
+          onSelectDifficulty={setDifficulty}
+          career={career}
+          dailyBounties={dailyBounties}
+          onPlayDaily={() => startSkirmish({ ...dailySpec, difficulty })}
           onOpenMyBase={openMyBaseBuilder}
           onRaidPlayerBase={startPlayerRaid}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onPlayCustomSpec={(spec) => startSkirmish(spec)}
+          onOpenSettings={() => {
+            setSettingsInitialTab('settings');
+            setSettingsOpen(true);
+          }}
+          onOpenLeaderboard={() => {
+            setSettingsInitialTab('ranks');
+            setSettingsOpen(true);
+          }}
+          onPlayCustomSpec={(spec) => startSkirmish({ ...spec, difficulty: spec.difficulty ?? difficulty })}
           onCraftPrompt={handleCraftPrompt}
         />
       ) : (
@@ -889,20 +1231,39 @@ export default function App() {
             publishStatus={publishStatus}
             basePublished={publishStatus === 'published' || publishStatus === 'saved'}
             demolishMode={demolishMode}
+            rallyMode={rallyMode}
             empireName={empireName}
             onChangeEmpireName={setEmpireName}
             onToggleDemolish={() => {
               unlockAudio();
+              setRallyMode(false);
               setDemolishMode((prev) => {
                 const next = !prev;
                 if (next) setPlacementKind(null);
                 return next;
               });
             }}
+            onToggleRally={() => {
+              unlockAudio();
+              setPlacementKind(null);
+              setDemolishMode(false);
+              setRallyMode((prev) => !prev);
+            }}
+            onCancelQueueItem={handleCancelQueueItem}
+            onRingTownBell={handleRingTownBell}
+            onFocusKeep={handleFocusKeep}
+            onFocusGhostBreach={() => {
+              const gb = stateRef.current.ghostBreach;
+              if (gb) panToTile(gb.tileX + 0.5, gb.tileY + 0.5);
+            }}
+            onFilterSelectedKind={handleFilterSelectedKind}
             onAdvanceAge={handleAdvanceAge}
-            onToggleSpeed={() => setGameSpeed((s) => (s === 1 ? 1.5 : 1))}
+            onToggleSpeed={cycleSpeed}
             onToggleMute={toggleMute}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => {
+              setSettingsInitialTab('settings');
+              setSettingsOpen(true);
+            }}
             onPublishBase={() => void handlePublishBase()}
             onDoneBaseBuilder={returnToHomeOverlay}
             onAskScout={() => {
@@ -918,14 +1279,17 @@ export default function App() {
             onTrainUnit={handleTrainUnit}
             onSelectPlacement={(kind) => {
               unlockAudio();
-              if (kind !== null) setDemolishMode(false);
+              if (kind !== null) {
+                setDemolishMode(false);
+                setRallyMode(false);
+              }
               setPlacementKind(kind);
             }}
             onTaunt={handleTaunt}
             onExitToWarRoom={returnToHomeOverlay}
           />
           <ChronicleModal
-            open={st.mode !== 'base_builder' && (st.outcome === 'victory' || st.outcome === 'defeat')}
+            open={isTerminalOutcome}
             state={st}
             streak={Math.max(1, streak)}
             rank={rank}
@@ -933,6 +1297,15 @@ export default function App() {
             epigraph={epigraph}
             shareCode={st.spec.isCustom && st.mode !== 'raid' ? encodeSkirmishCode(st.spec) : null}
             commentStatus={commentStatus}
+            bounties={chronicleBounties}
+            bountyBonusScore={chronicleBountyBonus}
+            rivalBanner={chronicleRivalBanner}
+            careerRank={careerRank}
+            xpGained={lastXpGained}
+            onOpenLeaderboard={() => {
+              setSettingsInitialTab('ranks');
+              setSettingsOpen(true);
+            }}
             onPostComment={() => void handlePostComment()}
             onCopyChronicle={() => void handleCopyChronicle()}
             onPlayAgain={() => {
@@ -952,12 +1325,13 @@ export default function App() {
 
       <SettingsModal
         open={settingsOpen}
+        initialTab={settingsInitialTab}
         onClose={() => setSettingsOpen(false)}
         inMatch={screen === 'game'}
         muted={muted}
         onToggleMute={toggleMute}
         gameSpeed={gameSpeed}
-        onToggleSpeed={() => setGameSpeed((s) => (s === 1 ? 1.5 : 1))}
+        onToggleSpeed={cycleSpeed}
         showMinimap={showMinimap}
         onToggleMinimap={() => setShowMinimap((v) => !v)}
         onTaunt={handleTaunt}
@@ -967,9 +1341,13 @@ export default function App() {
         bestScore={bestScore}
         rank={rank}
         leaderboard={leaderboard}
+        hallOfFame={hallOfFame}
+        playerBases={playerBases}
+        career={career}
         community={community}
         aiModeLabel={aiModeLabel}
-        onPlayCustomSpec={(spec) => startSkirmish(spec)}
+        onRaidPlayerBase={startPlayerRaid}
+        onPlayCustomSpec={(spec) => startSkirmish({ ...spec, difficulty: spec.difficulty ?? difficulty })}
         onCraftPrompt={handleCraftPrompt}
       />
     </main>

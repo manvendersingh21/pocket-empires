@@ -53,8 +53,11 @@ const { buildBlockedGrid, findPath, inBounds } = await import('../src/engine/pat
 const {
   POP_HARD_CAP,
   cmdAttackEnemyKeep,
+  cmdCancelQueueItem,
   cmdIssueOrder,
   cmdPlaceBuilding,
+  cmdRingTownBell,
+  cmdSetRallyPoint,
   cmdTrainUnit,
   cmdTriggerTaunt,
   computeScoreSummary,
@@ -292,6 +295,15 @@ describe('Property-Based Fuzz Suite (High-Trust Playbook Layer 3)', () => {
       const initState = createInitialState(spec);
       assertStateInvariants(initState, `${label}:init`);
 
+      // Verify symmetric Sacred Relics
+      assert.equal(initState.relics?.length, 2, `${label}: expected 2 Sacred Relics`);
+      const [rel0, rel1] = initState.relics!;
+      assert.ok(
+        Math.abs(rel0.x + rel1.x - MAP_SIZE) < 1e-6 &&
+          Math.abs(rel0.y + rel1.y - MAP_SIZE) < 1e-6,
+        `${label}: 180-deg Sacred Relic asymmetry`,
+      );
+
       const blocked = buildBlockedGrid(initState.tiles, initState.buildings, initState.mapSize);
       const pCourtX = PLAYER_TC_POS.x + 0.5;
       const pCourtY = PLAYER_TC_POS.y - 0.5;
@@ -464,9 +476,29 @@ describe('Property-Based Fuzz Suite (High-Trust Playbook Layer 3)', () => {
             if (lockedOutcome !== null) {
               assert.equal(resOrder, null, 'cmdIssueOrder must return null after terminal state');
             }
-          } else if (roll < 0.92) {
+          } else if (roll < 0.88) {
             // Fuzz cmdAttackEnemyKeep
             cmdAttackEnemyKeep(state, team);
+          } else if (roll < 0.93 && state.buildings.length > 0) {
+            // Fuzz cmdSetRallyPoint & cmdCancelQueueItem
+            const b = pick(rng, state.buildings);
+            const setOk = cmdSetRallyPoint(
+              state,
+              team,
+              b.id,
+              Math.floor(rng() * 18) - 1,
+              Math.floor(rng() * 18) - 1,
+            );
+            const cancelOk = cmdCancelQueueItem(state, team, b.id, 0);
+            if (lockedOutcome !== null) {
+              assert.equal(setOk, false, 'cmdSetRallyPoint must return false after terminal state');
+              assert.equal(cancelOk, false, 'cmdCancelQueueItem must return false after terminal state');
+            }
+          } else if (roll < 0.97) {
+            const bellOk = cmdRingTownBell(state, team);
+            if (lockedOutcome !== null) {
+              assert.equal(bellOk, false, 'cmdRingTownBell must return false after terminal state');
+            }
           } else {
             // Fuzz cmdTriggerTaunt
             cmdTriggerTaunt(state, pick(rng, TAUNT_IDS));

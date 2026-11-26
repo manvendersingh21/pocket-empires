@@ -3,6 +3,8 @@ import type {
   CompleteMatchResponse,
   DailyLeaderboardEntry,
   DailyWarRoomResponse,
+  HallOfFameEntry,
+  LeaderboardHubResponse,
   ListPlayerBasesResponse,
   PlayerWarRoomStatsDto,
   RecordRaidRequest,
@@ -25,6 +27,8 @@ export type {
   CompleteMatchResponse,
   DailyLeaderboardEntry,
   DailyWarRoomResponse,
+  HallOfFameEntry,
+  LeaderboardHubResponse,
   ListPlayerBasesResponse,
   PlayerBaseBlueprint,
   PlayerWarRoomStatsDto,
@@ -106,6 +110,7 @@ const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_LEADERBOARD_ROWS = 15;
 const MIN_COMMENT_CHARS = 10;
 const MAX_COMMENT_CHARS = 600;
+const HALL_OF_FAME_REDIS_KEY = 'empire:hall_of_fame';
 
 /** Returns today's UTC date key formatted as `YYYY-MM-DD`. */
 export function todayUtcDateKey(now: Date = new Date()): string {
@@ -180,6 +185,14 @@ function defaultPlayerProfile(): StoredPlayerProfile {
 function compareLeaderboardEntries(a: DailyLeaderboardEntry, b: DailyLeaderboardEntry): number {
   if (b.score !== a.score) return b.score - a.score;
   if (a.timeSec !== b.timeSec) return a.timeSec - b.timeSec;
+  return a.username.localeCompare(b.username);
+}
+
+function compareHallOfFameEntries(a: HallOfFameEntry, b: HallOfFameEntry): number {
+  if (b.totalCrowns !== a.totalCrowns) return b.totalCrowns - a.totalCrowns;
+  if (b.bestStreak !== a.bestStreak) return b.bestStreak - a.bestStreak;
+  if (b.bestScore !== a.bestScore) return b.bestScore - a.bestScore;
+  if (b.wins !== a.wins) return b.wins - a.wins;
   return a.username.localeCompare(b.username);
 }
 
@@ -260,13 +273,17 @@ export async function getDailyWarRoom(
     throw new EmpireValidationError('Invalid dateKey: expected YYYY-MM-DD');
   }
 
-  const [boardMap, storedStats] = await Promise.all([
+  const [boardMap, storedStats, hallMap] = await Promise.all([
     readJson<Record<string, DailyLeaderboardEntry>>(redis, boardRedisKey(dateKey), {}),
     readJson<StoredCommunityStats>(redis, statsRedisKey(dateKey), defaultStoredStats()),
+    readJson<Record<string, HallOfFameEntry>>(redis, HALL_OF_FAME_REDIS_KEY, {}),
   ]);
 
   const sortedEntries = Object.values(boardMap).sort(compareLeaderboardEntries);
   const leaderboard = sortedEntries.slice(0, MAX_LEADERBOARD_ROWS);
+  const hallOfFame = Object.values(hallMap)
+    .sort(compareHallOfFameEntries)
+    .slice(0, MAX_LEADERBOARD_ROWS);
   const community = toCommunityDto({
     ...defaultStoredStats(),
     ...storedStats,
@@ -298,8 +315,31 @@ export async function getDailyWarRoom(
   return {
     dateKey,
     leaderboard,
+    hallOfFame,
     community,
     player,
+  };
+}
+
+/**
+ * Loads the unified 3-League Leaderboard Hub (Today's Siege, Imperial Hall of Fame, Raid Citadels).
+ */
+export async function getLeaderboardHub(
+  redis: RedisLike,
+  dateKey: string,
+  username?: string,
+): Promise<LeaderboardHubResponse> {
+  const [warRoom, raidCitadels] = await Promise.all([
+    getDailyWarRoom(redis, dateKey, username),
+    listPlayerBases(redis),
+  ]);
+  return {
+    dateKey: warRoom.dateKey,
+    daily: warRoom.leaderboard,
+    hallOfFame: warRoom.hallOfFame ?? [],
+    raidCitadels,
+    community: warRoom.community,
+    player: warRoom.player,
   };
 }
 
@@ -342,12 +382,13 @@ export async function recordMatchCompletion(
       ? opts.strategy.trim().slice(0, 60)
       : 'Balanced Siege';
 
-  const [boardMap, rawStats, profile] = await Promise.all([
+  const [boardMap, rawStats, profile, hallMap] = await Promise.all([
     readJson<Record<string, DailyLeaderboardEntry>>(redis, boardRedisKey(opts.dateKey), {}),
     readJson<StoredCommunityStats>(redis, statsRedisKey(opts.dateKey), defaultStoredStats()),
     cleanUser !== 'anonymous'
       ? readJson<StoredPlayerProfile>(redis, playerRedisKey(cleanUser), defaultPlayerProfile())
       : Promise.resolve(defaultPlayerProfile()),
+    readJson<Record<string, HallOfFameEntry>>(redis, HALL_OF_FAME_REDIS_KEY, {}),
   ]);
 
   const stats: StoredCommunityStats = {
@@ -360,6 +401,7 @@ export async function recordMatchCompletion(
 
   let nextProfile: StoredPlayerProfile = { ...profile };
   let flairAwarded: string | null = null;
+  let hallDirty = false;
 
   if (opts.victory) {
     stats.totalWins += 1;
@@ -386,11 +428,11 @@ export async function recordMatchCompletion(
         strategy,
         wololos,
       };
-      const existing = boardMap[cleanUser];
+      const prevDailyRow = boardMap[cleanUser];
       const isBetter =
-        !existing ||
-        candidate.score > existing.score ||
-        (candidate.score === existing.score && candidate.timeSec < existing.timeSec);
+        !prevDailyRow ||
+        candidate.score > prevDailyRow.score ||
+        (candidate.score === prevDailyRow.score && candidate.timeSec < prevDailyRow.timeSec);
       if (isBetter) {
         boardMap[cleanUser] = candidate;
       }
@@ -411,6 +453,19 @@ export async function recordMatchCompletion(
           lastWinDate: opts.dateKey,
         };
       }
+
+      const prevHall = hallMap[cleanUser];
+      const crownDelta = prevDailyRow ? Math.max(0, crowns - prevDailyRow.crowns) : crowns;
+      const winDelta = prevDailyRow ? 0 : 1;
+      hallMap[cleanUser] = {
+        username: cleanUser,
+        totalCrowns: (prevHall?.totalCrowns ?? 0) + crownDelta,
+        wins: (prevHall?.wins ?? 0) + winDelta,
+        bestStreak: Math.max(prevHall?.bestStreak ?? 0, nextProfile.streak),
+        bestScore: Math.max(prevHall?.bestScore ?? 0, opts.score),
+        favStrategy: !prevHall || isBetter ? strategy : prevHall.favStrategy,
+      };
+      hallDirty = true;
     }
   }
 
@@ -420,6 +475,9 @@ export async function recordMatchCompletion(
   if (opts.victory && cleanUser !== 'anonymous') {
     writes.push(redis.set(boardRedisKey(opts.dateKey), JSON.stringify(boardMap)));
     writes.push(redis.set(playerRedisKey(cleanUser), JSON.stringify(nextProfile)));
+    if (hallDirty) {
+      writes.push(redis.set(HALL_OF_FAME_REDIS_KEY, JSON.stringify(hallMap)));
+    }
   }
   await Promise.all(writes);
 
@@ -435,6 +493,9 @@ export async function recordMatchCompletion(
 
   const sortedEntries = Object.values(boardMap).sort(compareLeaderboardEntries);
   const leaderboard = sortedEntries.slice(0, MAX_LEADERBOARD_ROWS);
+  const hallOfFame = Object.values(hallMap)
+    .sort(compareHallOfFameEntries)
+    .slice(0, MAX_LEADERBOARD_ROWS);
   const community = toCommunityDto(stats);
 
   const activeStreak =
@@ -451,6 +512,7 @@ export async function recordMatchCompletion(
     saved: true,
     dateKey: opts.dateKey,
     leaderboard,
+    hallOfFame,
     community,
     player: {
       streak: activeStreak,

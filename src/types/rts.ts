@@ -226,6 +226,8 @@ export interface TauntDef {
 
 export type AIPersonaId = 'longbow_earl' | 'knight_baron' | 'viking_jarl' | 'monk_abbot';
 
+export type DifficultyId = 'standard' | 'veteran' | 'imperial';
+
 export interface SkirmishSpec {
   seed: number;
   dateKey: string;
@@ -240,6 +242,7 @@ export interface SkirmishSpec {
   parSec: number;
   startingGoldBonus?: number;
   chokepointStyle: 'twin_fords' | 'central_bridge' | ' canyon_pass' | 'open_steppe';
+  difficulty?: DifficultyId;
   isCustom?: boolean;
   customPrompt?: string;
 }
@@ -263,6 +266,9 @@ export type SoundEventKind =
   | 'war_horn'
   | 'age_up'
   | 'trebuchet_fire'
+  | 'relic_capture'
+  | 'town_bell'
+  | 'rally_set'
   | 'victory'
   | 'defeat';
 
@@ -282,6 +288,8 @@ export interface MatchStats {
   horsesTamed?: number;
   sheepHerded?: number;
   boarsHunted?: number;
+  relicsCaptured?: number;
+  townBellsRung?: number;
   countsByUnit: Partial<Record<UnitKind, number>>;
 }
 
@@ -301,6 +309,24 @@ export interface WildHorse {
   wanderTimer: number;
   targetX: number;
   targetY: number;
+}
+
+export interface Relic {
+  id: number;
+  x: number;
+  y: number;
+  homeX: number;
+  homeY: number;
+  owner: Team | 'neutral';
+  carrierUnitId: number | null;
+  autoReturn: boolean;
+  goldTimer: number;
+}
+
+export interface TimelinePoint {
+  t: number;
+  playerPower: number;
+  enemyPower: number;
 }
 
 export interface SavedBuildingPlacement {
@@ -341,6 +367,9 @@ export interface GameState {
   buildings: Building[];
   units: Unit[];
   horses?: WildHorse[];
+  relics?: Relic[];
+  timeline?: TimelinePoint[];
+  townBellSec?: number;
   projectiles: Projectile[];
   callouts: FloatingCallout[];
   soundEvents: SoundEventKind[];

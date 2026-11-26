@@ -453,6 +453,16 @@ export function getInstantAdvisorWhisper(state: GameState): AdvisorWhisper {
     );
   }
 
+  const unclaimedRelic = (state.relics ?? []).find(
+    (r) => r.owner === 'neutral' && r.carrierUnitId === null,
+  );
+  if (unclaimedRelic && hasMilitaryProduction && playerMilitary.length > 0) {
+    return localWhisper(
+      'A Sacred Relic gleams near the crossing, Sire—escort it to our Keep or Monastery for endless Gold!',
+      'opportunity',
+    );
+  }
+
   if (state.spec.modifier === 'wololo_sabbath' && playerMonks === 0) {
     return localWhisper(
       'Age of Wololo reigns, Sire—discounted Monks earn +50 Gold for every foe converted!',
